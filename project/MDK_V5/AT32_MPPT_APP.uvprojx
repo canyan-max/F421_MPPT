@@ -80,9 +80,9 @@
           </BeforeMake>
           <AfterMake>
             <RunUserProg1>0</RunUserProg1>
-            <RunUserProg2>0</RunUserProg2>
+            <RunUserProg2>1</RunUserProg2>
             <UserProg1Name></UserProg1Name>
-            <UserProg2Name></UserProg2Name>
+            <UserProg2Name>./keil5_disp_size_bar.exe</UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
             <nStopA1X>0</nStopA1X>
@@ -325,7 +325,7 @@
             <wLevel>2</wLevel>
             <uThumb>0</uThumb>
             <uSurpInc>0</uSurpInc>
-            <uC99>0</uC99>
+            <uC99>1</uC99>
             <uGnu>0</uGnu>
             <useXO>0</useXO>
             <v6Lang>1</v6Lang>
@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define>AT32F421C8T7, USE_STDPERIPH_DRIVER, AT_START_F421_V1</Define>
               <Undefine></Undefine>
-              <IncludePath>..\..\libraries\drivers\inc;..\..\libraries\cmsis\cm4\core_support;..\..\libraries\cmsis\cm4\device_support;..\inc;..\..\00_Project_Config;..\..\03_Platform\comm;..\..\03_Platform\mcu_interface</IncludePath>
+              <IncludePath>..\..\libraries\drivers\inc;..\..\libraries\cmsis\cm4\core_support;..\..\libraries\cmsis\cm4\device_support;..\inc;..\..\00_Project_Config;..\..\03_Platform\comm;..\..\03_Platform\mcu_interface;..\..\03_Platform\bsp;..\..\02_Service;..\..\06_Component\filter</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -380,61 +380,6 @@
         </TargetArmAds>
       </TargetOption>
       <Groups>
-        <Group>
-          <GroupName>user</GroupName>
-          <Files>
-            <File>
-              <FileName>at32f421_int.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\at32f421_int.c</FilePath>
-            </File>
-            <File>
-              <FileName>at32f421_wk_config.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\at32f421_wk_config.c</FilePath>
-            </File>
-            <File>
-              <FileName>main.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\main.c</FilePath>
-            </File>
-            <File>
-              <FileName>wk_system.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wk_system.c</FilePath>
-            </File>
-            <File>
-              <FileName>wk_tmr.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wk_tmr.c</FilePath>
-            </File>
-            <File>
-              <FileName>wk_gpio.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wk_gpio.c</FilePath>
-            </File>
-            <File>
-              <FileName>wk_adc.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wk_adc.c</FilePath>
-            </File>
-            <File>
-              <FileName>wk_dma.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wk_dma.c</FilePath>
-            </File>
-            <File>
-              <FileName>wk_i2c.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wk_i2c.c</FilePath>
-            </File>
-            <File>
-              <FileName>wk_usart.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wk_usart.c</FilePath>
-            </File>
-          </Files>
-        </Group>
         <Group>
           <GroupName>firmware</GroupName>
           <Files>
@@ -489,6 +434,11 @@
               <FilePath>..\..\libraries\drivers\src\at32f421_flash.c</FilePath>
             </File>
             <File>
+              <FileName>at32f421_exint.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\libraries\drivers\src\at32f421_exint.c</FilePath>
+            </File>
+            <File>
               <FileName>at32f421_misc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\libraries\drivers\src\at32f421_misc.c</FilePath>
@@ -516,6 +466,66 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>user</GroupName>
+          <Files>
+            <File>
+              <FileName>at32f421_int.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\at32f421_int.c</FilePath>
+            </File>
+            <File>
+              <FileName>at32f421_wk_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\at32f421_wk_config.c</FilePath>
+            </File>
+            <File>
+              <FileName>main.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\main.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_system.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_system.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_tmr.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_tmr.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_gpio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_gpio.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_adc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_adc.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_dma.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_dma.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_i2c.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_usart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_usart.c</FilePath>
+            </File>
+            <File>
+              <FileName>wk_exint.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\wk_exint.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Platform_Impl</GroupName>
           <Files>
             <File>
@@ -527,6 +537,101 @@
               <FileName>at32f421_adc_adapter.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\04_Impl\mcu_at32\at32f421_adc_adapter.c</FilePath>
+            </File>
+            <File>
+              <FileName>at32f421_pwm_adapter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\04_Impl\mcu_at32\at32f421_pwm_adapter.c</FilePath>
+            </File>
+            <File>
+              <FileName>at32f421_sys_adapter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\04_Impl\mcu_at32\at32f421_sys_adapter.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Platform_BSP</GroupName>
+          <Files>
+            <File>
+              <FileName>bsp_measure.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\03_Platform\bsp\bsp_measure.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_power_path.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\03_Platform\bsp\bsp_power_path.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Service</GroupName>
+          <Files>
+            <File>
+              <FileName>svc_measure.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_measure.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_measure.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_measure.h</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_charge.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_charge.h</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_charge_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge_control.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_charge_control.h</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_charge_config.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_charge_config.h</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge_protection.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_charge_protection.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge_protection.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_charge_protection.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component</GroupName>
+          <Files>
+            <File>
+              <FileName>filter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\06_Component\filter\filter.c</FilePath>
+            </File>
+            <File>
+              <FileName>filter.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\06_Component\filter\filter.h</FilePath>
             </File>
           </Files>
         </Group>

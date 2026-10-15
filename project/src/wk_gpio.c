@@ -50,7 +50,8 @@ void wk_gpio_config(void)
   /* add user code end gpio_config 1 */
 
   /* gpio output config */
-  gpio_bits_reset(GPIOB, BT_VDD_EN_PB10_PIN | LOADMOS_OUT_PB11_PIN | SOL_MOS_OUT_PB12_PIN);
+  gpio_bits_reset(GPIOB, BT_VDD_EN_PB10_PIN  | SOL_MOS_OUT_PB12_PIN); //| LOADMOS_OUT_PB11_PIN
+  gpio_bits_set(GPIOB, LOADMOS_OUT_PB11_PIN);
   gpio_bits_reset(RS485_TXEN_PF7_GPIO_PORT, RS485_TXEN_PF7_PIN);
   gpio_bits_set(GPIOB, LED1_PB3_PIN | LED2_PB4_PIN | LED3_PB5_PIN);
 
@@ -82,8 +83,8 @@ void wk_gpio_config(void)
   gpio_init(GPIOA, &gpio_init_struct);
 
   gpio_init_struct.gpio_mode = GPIO_MODE_ANALOG;
-  gpio_init_struct.gpio_pins = GPIO_PINS_0 | GPIO_PINS_2 | GPIO_PINS_13 | GPIO_PINS_14 | GPIO_PINS_15 | 
-                               GPIO_PINS_8 | GPIO_PINS_9;
+  gpio_init_struct.gpio_pins = GPIO_PINS_2 | GPIO_PINS_13 | GPIO_PINS_14 | GPIO_PINS_15 | GPIO_PINS_8 | 
+                               GPIO_PINS_9;
   gpio_init_struct.gpio_pull = GPIO_PULL_NONE;
   gpio_init(GPIOB, &gpio_init_struct);
 

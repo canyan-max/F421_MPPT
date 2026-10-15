@@ -15,25 +15,29 @@
             <ModeSub name="IN4" value="TRUE"/>
             <ModeSub name="IN5" value="TRUE"/>
             <ModeSub name="IN6" value="TRUE"/>
+            <ModeSub name="VINTRV" value="TRUE"/>
         </Mode>
         <Parameters>
-            <ParametersSub name="OrdinaryTriggerSource" value="ADC12_ORDINARY_TRIG_TMR1CH1"/>
-            <ParametersSub name="NbrOfOrdinarySequence" value="5"/>
+            <ParametersSub name="OrdinaryTriggerSource" value="ADC12_ORDINARY_TRIG_TMR15CH1"/>
+            <ParametersSub name="NbrOfOrdinarySequence" value="6"/>
             <ParametersSub name="Channel_OrdinarySequence_1" value="ADC_CHANNEL_0"/>
-            <ParametersSub name="SamplingTime_OrdinarySequence_1" value="ADC_SAMPLETIME_13_5"/>
-            <ParametersSub name="SamplingRate_OrdinarySequence_1" value="0.769"/>
+            <ParametersSub name="SamplingTime_OrdinarySequence_1" value="ADC_SAMPLETIME_239_5"/>
+            <ParametersSub name="SamplingRate_OrdinarySequence_1" value="0.079"/>
             <ParametersSub name="Channel_OrdinarySequence_2" value="ADC_CHANNEL_1"/>
-            <ParametersSub name="SamplingTime_OrdinarySequence_2" value="ADC_SAMPLETIME_13_5"/>
-            <ParametersSub name="SamplingRate_OrdinarySequence_2" value="0.769"/>
+            <ParametersSub name="SamplingTime_OrdinarySequence_2" value="ADC_SAMPLETIME_239_5"/>
+            <ParametersSub name="SamplingRate_OrdinarySequence_2" value="0.079"/>
             <ParametersSub name="Channel_OrdinarySequence_3" value="ADC_CHANNEL_4"/>
-            <ParametersSub name="SamplingTime_OrdinarySequence_3" value="ADC_SAMPLETIME_13_5"/>
-            <ParametersSub name="SamplingRate_OrdinarySequence_3" value="0.769"/>
+            <ParametersSub name="SamplingTime_OrdinarySequence_3" value="ADC_SAMPLETIME_239_5"/>
+            <ParametersSub name="SamplingRate_OrdinarySequence_3" value="0.079"/>
             <ParametersSub name="Channel_OrdinarySequence_4" value="ADC_CHANNEL_5"/>
-            <ParametersSub name="SamplingTime_OrdinarySequence_4" value="ADC_SAMPLETIME_13_5"/>
-            <ParametersSub name="SamplingRate_OrdinarySequence_4" value="0.769"/>
+            <ParametersSub name="SamplingTime_OrdinarySequence_4" value="ADC_SAMPLETIME_239_5"/>
+            <ParametersSub name="SamplingRate_OrdinarySequence_4" value="0.079"/>
             <ParametersSub name="Channel_OrdinarySequence_5" value="ADC_CHANNEL_6"/>
-            <ParametersSub name="SamplingTime_OrdinarySequence_5" value="ADC_SAMPLETIME_13_5"/>
-            <ParametersSub name="SamplingRate_OrdinarySequence_5" value="0.769"/>
+            <ParametersSub name="SamplingTime_OrdinarySequence_5" value="ADC_SAMPLETIME_239_5"/>
+            <ParametersSub name="SamplingRate_OrdinarySequence_5" value="0.079"/>
+            <ParametersSub name="Channel_OrdinarySequence_6" value="ADC_CHANNEL_17"/>
+            <ParametersSub name="SamplingTime_OrdinarySequence_6" value="ADC_SAMPLETIME_239_5"/>
+            <ParametersSub name="SamplingRate_OrdinarySequence_6" value="0.079"/>
         </Parameters>
     </ADC1>
     <DEBUG>
@@ -41,6 +45,14 @@
             <ModeSub name="SWD" value="TRUE"/>
         </Mode>
     </DEBUG>
+    <EXINT>
+        <Mode>
+            <ModeSub name="EXINT0" value="TRUE"/>
+        </Mode>
+        <Parameters>
+            <ParametersSub name="TriggerPolarity_0" value="EXINT_TRIGGER_FALLING_EDGE"/>
+        </Parameters>
+    </EXINT>
     <I2C1>
         <Mode>
             <ModeSub name="I2C" value="I2C"/>
@@ -60,21 +72,32 @@
     </SYSTEM>
     <TMR1>
         <Mode>
-            <ModeSub name="Channel1 mode" value="Output_without_pin"/>
             <ModeSub name="Channel3 mode" value="Output_CH3_CH3C"/>
             <ModeSub name="Activated" value="TRUE"/>
         </Mode>
         <Parameters>
             <ParametersSub name="Period" value="1199"/>
+            <ParametersSub name="PeriodBufferEnable" value="TRUE"/>
             <ParametersSub name="DeadTime" value="10"/>
             <ParametersSub name="DeadTimeValue" value="83"/>
-            <ParametersSub name="OCMode_1" value="TMR_OUTPUT_CONTROL_PWM_MODE_A"/>
-            <ParametersSub name="ChannelData_1" value="300"/>
             <ParametersSub name="OCMode_3" value="TMR_OUTPUT_CONTROL_PWM_MODE_A"/>
             <ParametersSub name="ChannelData_3" value="600"/>
             <ParametersSub name="OC3Buffer" value="TRUE"/>
         </Parameters>
     </TMR1>
+    <TMR15>
+        <Mode>
+            <ModeSub name="Channel1 mode" value="Output_without_pin"/>
+            <ModeSub name="Activated" value="TRUE"/>
+        </Mode>
+        <Parameters>
+            <ParametersSub name="DividerValue" value="1"/>
+            <ParametersSub name="Period" value="59999"/>
+            <ParametersSub name="OCMode_1" value="TMR_OUTPUT_CONTROL_PWM_MODE_A"/>
+            <ParametersSub name="ChannelData_1" value="15000"/>
+            <ParametersSub name="OC1Buffer" value="TRUE"/>
+        </Parameters>
+    </TMR15>
     <USART1>
         <Mode>
             <ModeSub name="Mode" value="Asynchronous"/>
@@ -104,10 +127,12 @@
         <SysTick_Handler>1;15;0;0;0;1</SysTick_Handler>
         <FLASH_IRQHandler>0;0;0;0;0;0</FLASH_IRQHandler>
         <CRM_IRQHandler>0;0;0;0;0;0</CRM_IRQHandler>
-        <DMA1_Channel1_IRQHandler>1;0;0;0;0;1</DMA1_Channel1_IRQHandler>
+        <EXINT1_0_IRQHandler>1;0;0;0;0;1</EXINT1_0_IRQHandler>
+        <DMA1_Channel1_IRQHandler>1;1;0;0;0;1</DMA1_Channel1_IRQHandler>
         <ADC1_CMP_IRQHandler>0;0;0;0;0;0</ADC1_CMP_IRQHandler>
         <TMR1_BRK_OVF_TRG_HALL_IRQHandler>0;0;0;0;0;0</TMR1_BRK_OVF_TRG_HALL_IRQHandler>
         <TMR1_CH_IRQHandler>0;0;0;0;0;0</TMR1_CH_IRQHandler>
+        <TMR15_GLOBAL_IRQHandler>0;0;0;0;0;0</TMR15_GLOBAL_IRQHandler>
         <I2C1_EVT_IRQHandler>0;0;0;0;0;0</I2C1_EVT_IRQHandler>
         <USART1_IRQHandler>0;0;0;0;0;0</USART1_IRQHandler>
         <USART2_IRQHandler>0;0;0;0;0;0</USART2_IRQHandler>
@@ -140,6 +165,10 @@
         </Signal>
         <Signal SignalName="ADC1_IN6" PinName="PA6">
             <Parameters name="Label" value="NTC_PA6"/>
+        </Signal>
+        <Signal SignalName="EXINT0" PinName="PB0">
+            <Parameters name="GPIO_PullType_Set" value="GPIO_PULL_UP"/>
+            <Parameters name="Label" value="OUT_CUR_ERR"/>
         </Signal>
         <Signal SignalName="GPIO_Output" PinName="PB10">
             <Parameters name="Label" value="BT_VDD_EN_PB10"/>
@@ -208,6 +237,7 @@
         <PinSub pinname="PA4" signalname="ADC1_IN4" signaltype="3"/>
         <PinSub pinname="PA5" signalname="ADC1_IN5" signaltype="3"/>
         <PinSub pinname="PA6" signalname="ADC1_IN6" signaltype="3"/>
+        <PinSub pinname="PB0" signalname="EXINT0" signaltype="3"/>
         <PinSub pinname="PB1" signalname="TMR1_CH3C" signaltype="2"/>
         <PinSub pinname="PB10" signalname="GPIO_Output" signaltype="3"/>
         <PinSub pinname="PB11" signalname="GPIO_Output" signaltype="3"/>
@@ -250,5 +280,7 @@
         <RankSub RankNum="16" FixPosFlag="FALSE" FuncName="wk_usart1_init" InstanceName="USART1" CodeSection="usart1 function" MainDoNotCallFlag="FALSE"/>
         <RankSub RankNum="17" FixPosFlag="FALSE" FuncName="wk_usart2_init" InstanceName="USART2" CodeSection="usart2 function" MainDoNotCallFlag="FALSE"/>
         <RankSub RankNum="22" FixPosFlag="FALSE" FuncName="wk_i2c1_init" InstanceName="I2C1" CodeSection="i2c1 function" MainDoNotCallFlag="FALSE"/>
+        <RankSub RankNum="34" FixPosFlag="FALSE" FuncName="wk_tmr15_init" InstanceName="TMR15" CodeSection="tmr15 function" MainDoNotCallFlag="FALSE"/>
+        <RankSub RankNum="29" FixPosFlag="FALSE" FuncName="wk_exint_config" InstanceName="EXINT" CodeSection="exint function" MainDoNotCallFlag="FALSE"/>
     </FunctionRankInfo>
 </Root>

@@ -69,7 +69,7 @@ extern "C" {
 /*#define CRC_MODULE_ENABLED----------------------*/
 /*#define WWDT_MODULE_ENABLED---------------------*/
 /*#define WDT_MODULE_ENABLED----------------------*/
-/*#define EXINT_MODULE_ENABLED--------------------*/
+#define EXINT_MODULE_ENABLED
 #define MISC_MODULE_ENABLED
 #define SCFG_MODULE_ENABLED
 

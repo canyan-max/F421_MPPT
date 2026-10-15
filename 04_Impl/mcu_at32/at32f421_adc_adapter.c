@@ -1,62 +1,167 @@
+/**
+ ******************************************************************************
+ *@file               :   at32f421_adc_adapter.c
+ *@brief              :   Adapt ADC DMA buffer binding and transfer events for
+ *                        AT32F421.
+ *@version            :   V1.0
+ *@note               :   1 tab == 4 spaces!
+ ******************************************************************************
+ */
+
+/* includes -----------------------------------------------------------------*/
 #include <stddef.h>
 #include "at32f421_wk_config.h"
 #include "plat_adc.h"
-static volatile uint16_t *adc_buffer;
-static uint16_t adc_count;
-static plat_adc_callback_t adc_callback;
-static volatile uint8_t adc_running;
-static void clear_flags(void)
+/* define   -----------------------------------------------------------------*/
+
+/* typedef ------------------------------------------------------------------*/
+typedef struct ADC_BINDING_T
 {
-    dma_flag_clear(DMA1_FDT1_FLAG);
-    dma_flag_clear(DMA1_HDT1_FLAG);
-    dma_flag_clear(DMA1_DTERR1_FLAG);
+    adc_type         *p_adc;
+    dma_channel_type *p_dma;
+    uint32_t          half_flag;
+    uint32_t          full_flag;
+    uint32_t          error_flag;
+} adc_binding_t;
+typedef struct ADC_STATE_T
+{
+    volatile uint16_t  *p_buffer;
+    uint16_t            count;
+    plat_adc_callback_t pf_callback;
+    volatile uint8_t    running;
+} adc_state_t;
+/* variables ----------------------------------------------------------------*/
+/* Generated init owns scan order, scan length and triggering. */
+static const adc_binding_t g_adc_bindings[] = {
+    {ADC1, DMA1_CHANNEL1, DMA1_HDT1_FLAG, DMA1_FDT1_FLAG, DMA1_DTERR1_FLAG},
+};
+static adc_state_t
+    g_adc_states[sizeof(g_adc_bindings) / sizeof(g_adc_bindings[0U])];
+/* private  functions  ------------------------------------------------------*/
+static void clear_flags(const adc_binding_t *p_binding)
+{
+    dma_flag_clear(p_binding->full_flag);
+    dma_flag_clear(p_binding->half_flag);
+    dma_flag_clear(p_binding->error_flag);
 }
-platform_err_t plat_adc_start(volatile uint16_t *buffer, uint16_t count,
-    plat_adc_callback_t callback)
+/* exported functions -------------------------------------------------------*/
+platform_err_t plat_adc_start(plat_adc_id_t       id,
+                              volatile uint16_t  *p_buffer,
+                              uint16_t            count,
+                              plat_adc_callback_t pf_callback)
 {
-    if(buffer == NULL || callback == NULL || count == 0U ||
-       count % (2U * PLAT_ADC_CHANNEL_COUNT) != 0U ||
-       ((uint32_t)buffer & 1U) != 0U) return PLATFORM_ERR_PARAM;
-    if(adc_running != 0U) return PLATFORM_ERR_BUSY;
-    dma_channel_enable(DMA1_CHANNEL1, FALSE);
-    clear_flags();
-    adc_buffer = buffer;
-    adc_count = count;
-    adc_callback = callback;
-    DMA1_CHANNEL1->paddr = (uint32_t)&ADC1->odt;
-    DMA1_CHANNEL1->maddr = (uint32_t)buffer;
-    DMA1_CHANNEL1->dtcnt = count;
-    adc_running = 1U;
+    const adc_binding_t *p_binding = NULL;
+    adc_state_t         *p_state   = NULL;
+    uint16_t channel_count;
+    if(id >= sizeof(g_adc_bindings) / sizeof(g_adc_bindings[0U]))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+    p_binding = &g_adc_bindings[id];
+    p_state   = &g_adc_states[id];
+    channel_count = (uint16_t)(p_binding->p_adc->osq1_bit.oclen + 1U);
+
+    if(NULL == p_buffer || NULL == pf_callback || 0U == count ||
+       count != 2U * channel_count ||
+       0U != ((uint32_t)p_buffer & 1U))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+    if(0U != p_state->running)
+    {
+        return PLATFORM_ERR_BUSY;
+    }
+    dma_channel_enable(p_binding->p_dma, FALSE);
+    clear_flags(p_binding);
+    p_state->p_buffer       = p_buffer;
+    p_state->count          = count;
+    p_state->pf_callback    = pf_callback;
+    p_binding->p_dma->paddr = (uint32_t)&p_binding->p_adc->odt;
+    p_binding->p_dma->maddr = (uint32_t)p_buffer;
+    p_binding->p_dma->dtcnt = count;
+    p_state->running        = 1U;
     __DMB();
-    dma_channel_enable(DMA1_CHANNEL1, TRUE);
+    dma_channel_enable(p_binding->p_dma, TRUE);
     return PLATFORM_ERR_OK;
 }
-void plat_adc_stop(void)
+
+platform_err_t plat_adc_stop(plat_adc_id_t id)
 {
+    const adc_binding_t *p_binding = NULL;
+    adc_state_t         *p_state   = NULL;
+    if(id >= sizeof(g_adc_bindings) / sizeof(g_adc_bindings[0U]))
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+    p_binding = &g_adc_bindings[id];
+    p_state   = &g_adc_states[id];
+
     /* Main context only; prevent ISR dispatch before releasing the buffer. */
-    adc_running = 0U;
+    p_state->running = 0U;
     __DMB();
-    dma_channel_enable(DMA1_CHANNEL1, FALSE);
-    clear_flags();
-    adc_callback = NULL;
-    adc_buffer = NULL;
-    adc_count = 0U;
+    dma_channel_enable(p_binding->p_dma, FALSE);
+    clear_flags(p_binding);
+    p_state->pf_callback = NULL;
+    p_state->p_buffer    = NULL;
+    p_state->count       = 0U;
+    return PLATFORM_ERR_OK;
 }
-void plat_adc_dma_irq_handler(void)
+
+void plat_adc_dma_irq_handler(plat_adc_id_t id)
 {
-    uint8_t half = dma_flag_get(DMA1_HDT1_FLAG) != RESET;
-    uint8_t full = dma_flag_get(DMA1_FDT1_FLAG) != RESET;
-    uint8_t error = dma_flag_get(DMA1_DTERR1_FLAG) != RESET;
-    plat_adc_callback_t callback = adc_callback;
-    clear_flags();
-    if(adc_running == 0U || callback == NULL) return;
-    if(error != 0U || (half != 0U && full != 0U)) {
-        dma_channel_enable(DMA1_CHANNEL1, FALSE);
-        adc_running = 0U;
-        callback(PLAT_ADC_EVENT_ERROR, NULL, 0U);
+    uint8_t             half        = 0U;
+    uint8_t             full        = 0U;
+    uint8_t             error       = 0U;
+    plat_adc_callback_t pf_callback = NULL;
+
+    const adc_binding_t *p_binding = NULL;
+    adc_state_t         *p_state   = NULL;
+    if(id >= sizeof(g_adc_bindings) / sizeof(g_adc_bindings[0U]))
+    {
+        return;
+    }
+    p_binding = &g_adc_bindings[id];
+    p_state   = &g_adc_states[id];
+
+    half        = RESET != dma_flag_get(p_binding->half_flag);
+    full        = RESET != dma_flag_get(p_binding->full_flag);
+    error       = RESET != dma_flag_get(p_binding->error_flag);
+    pf_callback = p_state->pf_callback;
+    clear_flags(p_binding);
+    if(0U == p_state->running || NULL == pf_callback)
+    {
+        return;
+    }
+    if(0U != error)
+    {
+        dma_channel_enable(p_binding->p_dma, FALSE);
+        p_state->running = 0U;
+        pf_callback(id, PLAT_ADC_EVENT_ERROR, NULL, 0U);
+        return;
+    }
+    if(0U != half && 0U != full)
+    {
+        /* Discard potentially overwritten halves after a CPU halt. */
+        pf_callback(id, PLAT_ADC_EVENT_OVERRUN, NULL, 0U);
         return;
     }
     __DMB();
-    if(half != 0U) callback(PLAT_ADC_EVENT_HALF, adc_buffer, adc_count / 2U);
-    if(full != 0U) callback(PLAT_ADC_EVENT_FULL, adc_buffer + adc_count / 2U, adc_count / 2U);
+    if(0U != half)
+    {
+        pf_callback(id, PLAT_ADC_EVENT_HALF, p_state->p_buffer,
+                    p_state->count / 2U);
+    }
+    if(0U != full)
+    {
+        pf_callback(id, PLAT_ADC_EVENT_FULL,
+                    p_state->p_buffer + p_state->count / 2U,
+                    p_state->count / 2U);
+    }
 }
+
+void plat_adc_memory_barrier(void)
+{
+    __DMB();
+}
+/* end of file --------------------------------------------------------------*/
+

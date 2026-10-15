@@ -28,15 +28,6 @@
 #include "wk_dma.h"
 
 /* add user code begin 0 */
-#include "plat_adc.h"
-#include "plat_gpio.h"
-#include "board_resources.h"
-/* Temporary scope-test callback lives in main.c; no application policy here. */
-extern void adc_test_callback(plat_adc_event_t event,
-    const volatile uint16_t *samples, uint16_t count);
-extern volatile platform_err_t adc_test_start_result;
-extern volatile uint32_t adc_test_error_count;
-
 /* add user code end 0 */
 
 /**
@@ -73,22 +64,7 @@ void wk_dma1_channel1_init(void)
   dma_interrupt_enable(DMA1_CHANNEL1, DMA_DTERR_INT, TRUE);
 
   /* add user code begin dma1_channel1 1 */
-  /* Bind after DMA init and before TMR1 starts. Keep in preserved user area.
-   * Generated main later writes the SAME buffer address and count. */
-  (void)plat_gpio_write(BOARD_GPIO_LED1, PLAT_GPIO_RESET);
-  (void)plat_gpio_write(BOARD_GPIO_LED2, PLAT_GPIO_RESET);
-  adc_test_start_result = plat_adc_start(adc_test_buffer,
-      DMA1_CHANNEL1_BUFFER_SIZE, adc_test_callback);
-  if(adc_test_start_result != PLATFORM_ERR_OK)
-  {
-    adc_test_error_count++;
-    (void)plat_gpio_write(BOARD_GPIO_LED2, PLAT_GPIO_SET);
-    while(1) { } /* Diagnostic failure: never reach timer/power startup. */
-  }
-
-  /* Generated main sets address/count next, then enables the channel. */
-  dma_channel_enable(DMA1_CHANNEL1, FALSE);
-  /* add user code end dma1_channel1 1 */
+/* add user code end dma1_channel1 1 */
 }
 
 /**

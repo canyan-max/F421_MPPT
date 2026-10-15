@@ -30,7 +30,7 @@
 /* private includes ----------------------------------------------------------*/
 /* add user code begin private includes */
 #include "plat_adc.h"
-
+#include "board_resources.h"
 /* add user code end private includes */
 
 /* private typedef -----------------------------------------------------------*/
@@ -65,7 +65,6 @@
 
 /* external variables ---------------------------------------------------------*/
 /* add user code begin external variables */
-
 /* add user code end external variables */
 
 /**
@@ -225,6 +224,30 @@ void SysTick_Handler(void)
 }
 
 /**
+  * @brief  this function handles EXINT Line 1 & 0 handler.
+  * @param  none
+  * @retval none
+  */
+void EXINT1_0_IRQHandler(void)
+{
+  /* add user code begin EXINT1_0_IRQ 0 */
+
+  /* add user code end EXINT1_0_IRQ 0 */
+
+  if(exint_interrupt_flag_get(EXINT_LINE_0) != RESET)
+  {
+    /* add user code begin EXINT_LINE_0 */
+    /* clear flag */
+    exint_flag_clear(EXINT_LINE_0);
+    /* add user code end EXINT_LINE_0 */ 
+  }
+
+  /* add user code begin EXINT1_0_IRQ 1 */
+
+  /* add user code end EXINT1_0_IRQ 1 */
+}
+
+/**
   * @brief  this function handles DMA1 Channel 1 handler.
   * @param  none
   * @retval none
@@ -232,32 +255,28 @@ void SysTick_Handler(void)
 void DMA1_Channel1_IRQHandler(void)
 {
   /* add user code begin DMA1_Channel1_IRQ 0 */
-  plat_adc_dma_irq_handler();
-
-  /* add user code end DMA1_Channel1_IRQ 0 */
+    plat_adc_dma_irq_handler(BOARD_ADC_MEASURE);
+/* add user code end DMA1_Channel1_IRQ 0 */
 
   if(dma_interrupt_flag_get(DMA1_FDT1_FLAG) != RESET)
   {   
     /* add user code begin DMA1_FDT1_FLAG */
-    /* handle full data transfer and clear flag */
-    dma_flag_clear(DMA1_FDT1_FLAG);
-    /* add user code end DMA1_FDT1_FLAG */ 
+
+/* add user code end DMA1_FDT1_FLAG */ 
   }
 
   if(dma_interrupt_flag_get(DMA1_HDT1_FLAG) != RESET)
   {   
     /* add user code begin DMA1_HDT1_FLAG */
-    /* handle half data transfer and clear flag */
-    dma_flag_clear(DMA1_HDT1_FLAG);
-    /* add user code end DMA1_HDT1_FLAG */ 
+
+/* add user code end DMA1_HDT1_FLAG */ 
   }
 
   if(dma_interrupt_flag_get(DMA1_DTERR1_FLAG) != RESET)
   {   
     /* add user code begin DMA1_DTERR1_FLAG */
-    /* handle error transfer and clear flag */
-    dma_flag_clear(DMA1_DTERR1_FLAG);
-    /* add user code end DMA1_DTERR1_FLAG */ 
+
+/* add user code end DMA1_DTERR1_FLAG */ 
   }
 
   /* add user code begin DMA1_Channel1_IRQ 1 */

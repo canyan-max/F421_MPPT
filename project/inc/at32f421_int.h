@@ -66,6 +66,7 @@ void DebugMon_Handler(void);
 void PendSV_Handler(void);
 void SysTick_Handler(void);
 
+void EXINT1_0_IRQHandler(void);
 void DMA1_Channel1_IRQHandler(void);
 /* add user code begin exported functions */
 

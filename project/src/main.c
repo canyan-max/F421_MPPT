@@ -27,6 +27,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "at32f421_wk_config.h"
 #include "wk_adc.h"
+#include "wk_exint.h"
 #include "wk_i2c.h"
 #include "wk_tmr.h"
 #include "wk_usart.h"
@@ -36,20 +37,16 @@
 
 /* private includes ----------------------------------------------------------*/
 /* add user code begin private includes */
-#include "plat_adc.h"
-#include "plat_gpio.h"
-#include "board_resources.h"
-
+#include "svc_measure.h"
+#include "svc_charge.h"
 /* add user code end private includes */
 
 /* private typedef -----------------------------------------------------------*/
 /* add user code begin private typedef */
-
 /* add user code end private typedef */
 
 /* private define ------------------------------------------------------------*/
 /* add user code begin private define */
-
 /* add user code end private define */
 
 /* private macro -------------------------------------------------------------*/
@@ -59,42 +56,33 @@
 
 /* private variables ---------------------------------------------------------*/
 /* add user code begin private variables */
-/* Static DMA memory: 20 complete frames, 10 frames per half. */
-volatile uint16_t adc_test_buffer[100];
-volatile uint32_t adc_test_half_count;
-volatile uint32_t adc_test_full_count;
-volatile uint32_t adc_test_error_count;
-volatile uint32_t adc_test_last_sample;
-volatile platform_err_t adc_test_start_result;
-volatile uint32_t adc_test_stage;
-volatile uint32_t adc_test_dma_remaining;
-volatile uint32_t adc_test_dma_status;
-volatile uint32_t adc_test_adc_status;
-volatile uint32_t adc_test_timer_count;
+/* Startup shutdown and measurement initialization results for Watch. */
+static volatile platform_err_t g_measure_init_status;
+static volatile platform_err_t g_charge_init_status;
+static volatile platform_err_t g_charge_start_status = PLATFORM_ERR_BUSY;
+static uint32_t                g_charge_task_last_ms;
 
 /* add user code end private variables */
 
 /* private function prototypes --------------------------------------------*/
 /* add user code begin function prototypes */
-
+static void app_charge_task_process(void);
 /* add user code end function prototypes */
 
 /* private user code ---------------------------------------------------------*/
 /* add user code begin 0 */
-/* Scope marker only: bounded ISR work, no deferred DMA pointer. */
-void adc_test_callback(plat_adc_event_t event,
-    const volatile uint16_t *samples, uint16_t count)
+static void app_charge_task_process(void)
 {
-    if(event == PLAT_ADC_EVENT_ERROR || samples == 0 || count != 50U)
+    uint32_t now_ms = wk_timebase_get();
+
+    if((uint32_t)(now_ms - g_charge_task_last_ms) <
+       SVC_CHARGE_PROCESS_PERIOD_MS)
     {
-        adc_test_error_count++;
-        (void)plat_gpio_write(BOARD_GPIO_LED2, PLAT_GPIO_SET);
         return;
     }
-    adc_test_last_sample = samples[count - 1U];
-    if(event == PLAT_ADC_EVENT_HALF) adc_test_half_count++;
-    else if(event == PLAT_ADC_EVENT_FULL) adc_test_full_count++;
-    (void)plat_gpio_toggle(BOARD_GPIO_LED1);
+    /* Skip missed slots instead of running several control updates at once. */
+    g_charge_task_last_ms = now_ms;
+    svc_charge_process();
 }
 /* add user code end 0 */
 
@@ -107,7 +95,7 @@ int main(void)
 {
   /* add user code begin 1 */
 
-  /* add user code end 1 */
+    /* add user code end 1 */
 
   /* system clock config. */
   wk_system_clock_config();
@@ -139,8 +127,21 @@ int main(void)
                         DMA1_CHANNEL1_BUFFER_SIZE);
   dma_channel_enable(DMA1_CHANNEL1, TRUE);
 
+  /* add user code begin measure_init */
+    /* Bind acquisition before TMR15 starts producing ADC triggers. */
+    g_measure_init_status = svc_measure_init();
+    if(PLATFORM_ERR_OK != g_measure_init_status)
+    {
+        dma_channel_enable(DMA1_CHANNEL1, FALSE);
+    }
+  /* add user code end measure_init */
+
   /* init tmr1 function. */
   wk_tmr1_init();
+  /* add user code begin power_default_off */
+    g_charge_init_status =
+        svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V);
+  /* add user code end power_default_off */
 
   /* init usart1 function. */
   wk_usart1_init();
@@ -151,22 +152,27 @@ int main(void)
   /* init i2c1 function. */
   wk_i2c1_init();
 
+  /* init tmr15 function. */
+  wk_tmr15_init();
+
+  /* init exint function. */
+  wk_exint_config();
+
   /* add user code begin 2 */
-  adc_test_stage = 5U;
+  if(PLATFORM_ERR_OK == g_measure_init_status &&
+     PLATFORM_ERR_OK == g_charge_init_status)
+  {
+      g_charge_start_status = svc_charge_start();
+  }
+  g_charge_task_last_ms = wk_timebase_get();
   /* add user code end 2 */
 
   while(1)
   {
-    /* add user code begin 3 */
-    /* Temporary liveness diagnostic, independent of ADC/DMA interrupts.
-     * Not a data consumer or final scheduler; IRQs remain enabled. */
-    adc_test_dma_remaining = dma_data_number_get(DMA1_CHANNEL1);
-    adc_test_dma_status = DMA1->sts;
-    adc_test_adc_status = ADC1->sts;
-    adc_test_timer_count = tmr_counter_value_get(TMR1);
-    (void)plat_gpio_toggle(BOARD_GPIO_LED3);
-    wk_delay_ms(100);
-    /* add user code end 3 */
+      /* add user code begin 3 */
+      svc_measure_process();
+      app_charge_task_process();
+      /* add user code end 3 */
   }
 }
 

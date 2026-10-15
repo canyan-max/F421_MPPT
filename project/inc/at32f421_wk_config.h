@@ -43,8 +43,8 @@ extern "C" {
 
 /* exported types -------------------------------------------------------------*/
 /* add user code begin exported types */
-/* Scope test storage is defined in main.c and persists for DMA lifetime. */
-extern volatile uint16_t adc_test_buffer[100];
+/* Sampling storage is defined in main.c and persists for DMA lifetime. */
+extern volatile uint16_t g_adc_dma_buffer[12];
 
 /* add user code end exported types */
 
@@ -60,8 +60,8 @@ extern volatile uint16_t adc_test_buffer[100];
 
 /* add user code begin dma define */
 /* user can only modify the dma define value */
-#define DMA1_CHANNEL1_BUFFER_SIZE   100U
-#define DMA1_CHANNEL1_MEMORY_BASE_ADDR   ((uint32_t)adc_test_buffer)
+#define DMA1_CHANNEL1_BUFFER_SIZE   (12U)
+#define DMA1_CHANNEL1_MEMORY_BASE_ADDR   ((uint32_t)g_adc_dma_buffer)
 //#define DMA1_CHANNEL1_PERIPHERAL_BASE_ADDR  0
 
 //#define DMA1_CHANNEL2_BUFFER_SIZE   0
@@ -96,6 +96,8 @@ extern volatile uint16_t adc_test_buffer[100];
 #define VIN_VOL_PA5_GPIO_PORT    GPIOA
 #define NTC_PA6_PIN    GPIO_PINS_6
 #define NTC_PA6_GPIO_PORT    GPIOA
+#define OUT_CUR_ERR_PIN    GPIO_PINS_0
+#define OUT_CUR_ERR_GPIO_PORT    GPIOB
 #define BT_VDD_EN_PB10_PIN    GPIO_PINS_10
 #define BT_VDD_EN_PB10_GPIO_PORT    GPIOB
 #define LOADMOS_OUT_PB11_PIN    GPIO_PINS_11

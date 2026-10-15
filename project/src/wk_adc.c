@@ -28,6 +28,7 @@
 #include "wk_adc.h"
 
 /* add user code begin 0 */
+#include "wk_system.h"
 
 /* add user code end 0 */
 
@@ -80,29 +81,34 @@ void wk_adc1_init(void)
   adc_reset(ADC1);
   crm_adc_clock_div_set(CRM_ADC_DIV_6);
 
+  adc_tempersensor_vintrv_enable(TRUE);
+
   /* adc_settings----------------------------------------------------------- */
   adc_base_default_para_init(&adc_base_struct);
   adc_base_struct.sequence_mode = TRUE;
   adc_base_struct.repeat_mode = FALSE;
   adc_base_struct.data_align = ADC_RIGHT_ALIGNMENT;
-  adc_base_struct.ordinary_channel_length = 5;
+  adc_base_struct.ordinary_channel_length = 6;
   adc_base_config(ADC1, &adc_base_struct);
 
   /* adc_ordinary_conversionmode-------------------------------------------- */
-  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_0, 1, ADC_SAMPLETIME_13_5);
-  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_1, 2, ADC_SAMPLETIME_13_5);
-  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_4, 3, ADC_SAMPLETIME_13_5);
-  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_5, 4, ADC_SAMPLETIME_13_5);
-  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_6, 5, ADC_SAMPLETIME_13_5);
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_0, 1, ADC_SAMPLETIME_239_5);
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_1, 2, ADC_SAMPLETIME_239_5);
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_4, 3, ADC_SAMPLETIME_239_5);
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_5, 4, ADC_SAMPLETIME_239_5);
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_6, 5, ADC_SAMPLETIME_239_5);
+  adc_ordinary_channel_set(ADC1, ADC_CHANNEL_17, 6, ADC_SAMPLETIME_239_5);
 
   /* When "ADCx_ORDINARY_TRIG_SOFTWARE" is selected, user can only use software trigger. \
   The software trigger function is adc_ordinary_software_trigger_enable(ADCx, TRUE); */
-  adc_ordinary_conversion_trigger_set(ADC1, ADC12_ORDINARY_TRIG_TMR1CH1, TRUE);
+  adc_ordinary_conversion_trigger_set(ADC1, ADC12_ORDINARY_TRIG_TMR15CH1, TRUE);
 
   adc_ordinary_part_mode_enable(ADC1, FALSE);
 
   adc_dma_mode_enable(ADC1, TRUE);
   /* add user code begin adc1_init 2 */
+/* Internal reference startup settling, before ADC and timer startup. */
+  wk_delay_ms(1U);
 
   /* add user code end adc1_init 2 */
 
