@@ -49,6 +49,9 @@ svc_charge_fault_t
 svc_charge_protection_check_wake(const svc_measure_value_t *p_value);
 svc_charge_fault_t
 svc_charge_protection_update_temperature(const svc_measure_value_t *p_value);
+svc_charge_fault_t
+svc_charge_protection_update_input_loss(const svc_measure_value_t *p_value,
+                                        uint8_t duty_high_limited);
 svc_charge_fault_t svc_charge_protection_get_temperature_condition(
     const svc_measure_value_t *p_value);
 svc_charge_fault_t

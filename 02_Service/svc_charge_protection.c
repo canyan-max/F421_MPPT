@@ -11,12 +11,15 @@
 #include "svc_charge_protection.h"
 #include "svc_charge_config.h"
 /* define   -----------------------------------------------------------------*/
+#define SVC_CHARGE_INPUT_LOSS_CURRENT_MA (100U)
+#define SVC_CHARGE_INPUT_LOSS_DELAY_MS (200U)
 
 /* typedef ------------------------------------------------------------------*/
 
 /* variables ----------------------------------------------------------------*/
 static uint32_t           g_temperature_trip_tick_count;
 static svc_charge_fault_t g_temperature_pending_fault;
+static uint32_t           g_input_loss_tick_count;
 
 /* private  functions  ------------------------------------------------------*/
 static uint32_t delay_ms_to_ticks(uint32_t delay_ms)
@@ -43,6 +46,7 @@ void svc_charge_protection_reset(void)
 {
     g_temperature_trip_tick_count = 0U;
     g_temperature_pending_fault   = SVC_CHARGE_FAULT_NONE;
+    g_input_loss_tick_count       = 0U;
 }
 
 svc_charge_fault_t
@@ -149,6 +153,32 @@ svc_charge_protection_update_temperature(const svc_measure_value_t *p_value)
     }
     return (trip_ticks <= g_temperature_trip_tick_count)
                ? fault
+               : SVC_CHARGE_FAULT_NONE;
+}
+
+svc_charge_fault_t
+svc_charge_protection_update_input_loss(const svc_measure_value_t *p_value,
+                                        uint8_t duty_high_limited)
+{
+    uint32_t trip_ticks = delay_ms_to_ticks(SVC_CHARGE_INPUT_LOSS_DELAY_MS);
+
+    if(NULL == p_value)
+    {
+        g_input_loss_tick_count = 0U;
+        return SVC_CHARGE_FAULT_MEASUREMENT;
+    }
+    if(0U == duty_high_limited ||
+       SVC_CHARGE_INPUT_LOSS_CURRENT_MA <= p_value->input_current_ma)
+    {
+        g_input_loss_tick_count = 0U;
+        return SVC_CHARGE_FAULT_NONE;
+    }
+    if(g_input_loss_tick_count < trip_ticks)
+    {
+        g_input_loss_tick_count++;
+    }
+    return (trip_ticks <= g_input_loss_tick_count)
+               ? SVC_CHARGE_FAULT_INPUT_VOLTAGE
                : SVC_CHARGE_FAULT_NONE;
 }
 

@@ -356,6 +356,13 @@ static void process_constant_current(void)
         enter_fault(SVC_CHARGE_FAULT_DUTY_LIMIT, status);
         return;
     }
+    fault = svc_charge_protection_update_input_loss(&value,
+                                                    g_charge_duty_high_limited);
+    if(SVC_CHARGE_FAULT_NONE != fault)
+    {
+        enter_fault(fault, PLATFORM_ERR_HW);
+        return;
+    }
     if(0U == control_result.duty_changed)
     {
         return;
@@ -468,6 +475,13 @@ static void process_constant_voltage(void)
     if(PLATFORM_ERR_OK != status)
     {
         enter_fault(fault, status);
+        return;
+    }
+    fault = svc_charge_protection_update_input_loss(&value,
+                                                    g_charge_duty_high_limited);
+    if(SVC_CHARGE_FAULT_NONE != fault)
+    {
+        enter_fault(fault, PLATFORM_ERR_HW);
     }
 }
 
