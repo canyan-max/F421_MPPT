@@ -140,18 +140,19 @@ svc_charge_control_calculate_cc(const svc_measure_value_t *p_value,
 platform_err_t
 svc_charge_control_calculate_cv(const svc_measure_value_t *p_value,
                                 uint16_t current_duty_permille,
+                                uint32_t voltage_target_mv,
                                 svc_charge_control_result_t *p_result)
 {
     const svc_charge_config_t *p_config = svc_charge_config_get();
 
-    if(NULL == p_value || NULL == p_result)
+    if(NULL == p_value || NULL == p_result || 0U == voltage_target_mv)
     {
         return PLATFORM_ERR_PARAM;
     }
     initialize_result(p_result, current_duty_permille);
     p_result->current_error_ma = (int32_t)p_config->current_target_ma -
                                  (int32_t)p_value->input_current_ma;
-    p_result->voltage_error_mv = (int32_t)p_config->voltage_target_mv -
+    p_result->voltage_error_mv = (int32_t)voltage_target_mv -
                                  (int32_t)p_value->battery_voltage_mv;
     if(-(int32_t)p_config->voltage_deadband_mv > p_result->voltage_error_mv ||
        -(int32_t)p_config->current_deadband_ma > p_result->current_error_ma)

@@ -599,6 +599,16 @@
               <FilePath>..\..\02_Service\svc_charge_control.h</FilePath>
             </File>
             <File>
+              <FileName>svc_charge_maintenance.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_charge_maintenance.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_charge_maintenance.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_charge_maintenance.h</FilePath>
+            </File>
+            <File>
               <FileName>svc_charge_config.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\02_Service\svc_charge_config.c</FilePath>

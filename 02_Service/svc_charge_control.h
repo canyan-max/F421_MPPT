@@ -50,6 +50,7 @@ svc_charge_control_calculate_cc(const svc_measure_value_t *p_value,
 platform_err_t
 svc_charge_control_calculate_cv(const svc_measure_value_t *p_value,
                                 uint16_t current_duty_permille,
+                                uint32_t voltage_target_mv,
                                 svc_charge_control_result_t *p_result);
 
 #ifdef __cplusplus

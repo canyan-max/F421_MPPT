@@ -13,6 +13,7 @@
 /* define   -----------------------------------------------------------------*/
 #define SVC_CHARGE_INPUT_LOSS_CURRENT_MA (100U)
 #define SVC_CHARGE_INPUT_LOSS_DELAY_MS (200U)
+#define SVC_CHARGE_MAINTENANCE_REVERSE_DELAY_MS (50U)
 
 /* typedef ------------------------------------------------------------------*/
 
@@ -20,6 +21,7 @@
 static uint32_t           g_temperature_trip_tick_count;
 static svc_charge_fault_t g_temperature_pending_fault;
 static uint32_t           g_input_loss_tick_count;
+static uint32_t           g_maintenance_reverse_tick_count;
 
 /* private  functions  ------------------------------------------------------*/
 static uint32_t delay_ms_to_ticks(uint32_t delay_ms)
@@ -44,9 +46,10 @@ static uint8_t is_temperature_fault(svc_charge_fault_t fault)
 /* exported functions -------------------------------------------------------*/
 void svc_charge_protection_reset(void)
 {
-    g_temperature_trip_tick_count = 0U;
-    g_temperature_pending_fault   = SVC_CHARGE_FAULT_NONE;
-    g_input_loss_tick_count       = 0U;
+    g_temperature_trip_tick_count    = 0U;
+    g_temperature_pending_fault      = SVC_CHARGE_FAULT_NONE;
+    g_input_loss_tick_count          = 0U;
+    g_maintenance_reverse_tick_count = 0U;
 }
 
 svc_charge_fault_t
@@ -178,6 +181,32 @@ svc_charge_protection_update_input_loss(const svc_measure_value_t *p_value,
         g_input_loss_tick_count++;
     }
     return (trip_ticks <= g_input_loss_tick_count)
+               ? SVC_CHARGE_FAULT_INPUT_VOLTAGE
+               : SVC_CHARGE_FAULT_NONE;
+}
+
+svc_charge_fault_t svc_charge_protection_update_maintenance_reverse(
+    const svc_measure_value_t *p_value)
+{
+    uint32_t trip_ticks = delay_ms_to_ticks(
+        SVC_CHARGE_MAINTENANCE_REVERSE_DELAY_MS);
+
+    if(NULL == p_value)
+    {
+        g_maintenance_reverse_tick_count = 0U;
+        return SVC_CHARGE_FAULT_MEASUREMENT;
+    }
+    if(SVC_CHARGE_INPUT_LOSS_CURRENT_MA <= p_value->input_current_ma ||
+       0 <= p_value->battery_current_ma)
+    {
+        g_maintenance_reverse_tick_count = 0U;
+        return SVC_CHARGE_FAULT_NONE;
+    }
+    if(g_maintenance_reverse_tick_count < trip_ticks)
+    {
+        g_maintenance_reverse_tick_count++;
+    }
+    return (trip_ticks <= g_maintenance_reverse_tick_count)
                ? SVC_CHARGE_FAULT_INPUT_VOLTAGE
                : SVC_CHARGE_FAULT_NONE;
 }

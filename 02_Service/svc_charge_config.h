@@ -46,6 +46,21 @@ typedef struct SVC_CHARGE_RECOVERY_CONFIG_T
     uint32_t overcurrent_delay_ms;
 } svc_charge_recovery_config_t;
 
+typedef struct SVC_CHARGE_COMPLETION_CONFIG_T
+{
+    uint32_t voltage_margin_mv;
+    uint32_t termination_current_ma;
+    uint32_t discharge_tolerance_ma;
+    uint32_t confirm_delay_ms;
+} svc_charge_completion_config_t;
+
+typedef struct SVC_CHARGE_MAINTENANCE_CONFIG_T
+{
+    uint32_t voltage_target_mv;
+    uint32_t recharge_voltage_mv;
+    uint32_t recharge_delay_ms;
+} svc_charge_maintenance_config_t;
+
 typedef struct SVC_CHARGE_CONFIG_T
 {
     uint32_t                        voltage_target_mv;
@@ -60,6 +75,8 @@ typedef struct SVC_CHARGE_CONFIG_T
     uint16_t                        start_settle_ticks;
     svc_charge_temperature_config_t temperature;
     svc_charge_recovery_config_t    recovery;
+    svc_charge_completion_config_t  completion;
+    svc_charge_maintenance_config_t maintenance;
 } svc_charge_config_t;
 
 /* variables ----------------------------------------------------------------*/

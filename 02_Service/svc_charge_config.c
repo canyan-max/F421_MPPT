@@ -10,8 +10,13 @@
 /* includes -----------------------------------------------------------------*/
 #include "svc_charge_config.h"
 /* define   -----------------------------------------------------------------*/
-#define SVC_CHARGE_VOLTAGE_12V_TARGET_MV (14000U)
+#define SVC_CHARGE_VOLTAGE_12V_TARGET_MV (14400U)
 #define SVC_CHARGE_VOLTAGE_24V_TARGET_MV (29200U)
+#define SVC_CHARGE_MAINTENANCE_12V_TARGET_MV (14000U)
+#define SVC_CHARGE_MAINTENANCE_24V_TARGET_MV (28000U)
+#define SVC_CHARGE_MAINTENANCE_12V_RECHARGE_MV (13800U)
+#define SVC_CHARGE_MAINTENANCE_24V_RECHARGE_MV (27600U)
+#define SVC_CHARGE_MAINTENANCE_RECHARGE_DELAY_MS (5000U)
 #define SVC_CHARGE_VOLTAGE_DEADBAND_MV (20U)
 #define SVC_CHARGE_CV_EXIT_MARGIN_MV (100U)
 #define SVC_CHARGE_CURRENT_TARGET_MA (4000U)
@@ -28,6 +33,10 @@
 #define SVC_CHARGE_TEMP_TRIP_DELAY_MS (2000U)
 #define SVC_CHARGE_RECOVERY_NORMAL_DELAY_MS (5000U)
 #define SVC_CHARGE_RECOVERY_OVERCURRENT_DELAY_MS (20000U)
+#define SVC_CHARGE_COMPLETION_VOLTAGE_MARGIN_MV (200U)
+#define SVC_CHARGE_COMPLETION_CURRENT_MA (200U)
+#define SVC_CHARGE_COMPLETION_DISCHARGE_TOLERANCE_MA (500U)
+#define SVC_CHARGE_COMPLETION_CONFIRM_DELAY_MS (10000U)
 
 /* typedef ------------------------------------------------------------------*/
 
@@ -62,7 +71,22 @@ static platform_err_t validate_config(const svc_charge_config_t *p_config)
        0U == p_config->start_settle_ticks ||
        0U == p_config->recovery.normal_delay_ms ||
        p_config->recovery.normal_delay_ms >
-           p_config->recovery.overcurrent_delay_ms)
+           p_config->recovery.overcurrent_delay_ms ||
+       0U == p_config->completion.voltage_margin_mv ||
+       p_config->voltage_target_mv <= p_config->completion.voltage_margin_mv ||
+       0U == p_config->completion.termination_current_ma ||
+       p_config->current_target_ma <=
+           p_config->completion.termination_current_ma ||
+       0U == p_config->completion.discharge_tolerance_ma ||
+       p_config->current_target_ma <=
+           p_config->completion.discharge_tolerance_ma ||
+       0U == p_config->completion.confirm_delay_ms ||
+       0U == p_config->maintenance.voltage_target_mv ||
+       0U == p_config->maintenance.recharge_voltage_mv ||
+       p_config->maintenance.recharge_voltage_mv >=
+           p_config->maintenance.voltage_target_mv ||
+       0U == p_config->maintenance.recharge_delay_ms ||
+       p_config->voltage_target_mv <= p_config->maintenance.voltage_target_mv)
     {
         return PLATFORM_ERR_PARAM;
     }
@@ -90,6 +114,16 @@ static void load_common_config(svc_charge_config_t *p_config)
     p_config->recovery.normal_delay_ms = SVC_CHARGE_RECOVERY_NORMAL_DELAY_MS;
     p_config->recovery
         .overcurrent_delay_ms = SVC_CHARGE_RECOVERY_OVERCURRENT_DELAY_MS;
+    p_config->completion
+        .voltage_margin_mv = SVC_CHARGE_COMPLETION_VOLTAGE_MARGIN_MV;
+    p_config->completion
+        .termination_current_ma = SVC_CHARGE_COMPLETION_CURRENT_MA;
+    p_config->completion
+        .discharge_tolerance_ma = SVC_CHARGE_COMPLETION_DISCHARGE_TOLERANCE_MA;
+    p_config->completion
+        .confirm_delay_ms = SVC_CHARGE_COMPLETION_CONFIRM_DELAY_MS;
+    p_config->maintenance
+        .recharge_delay_ms = SVC_CHARGE_MAINTENANCE_RECHARGE_DELAY_MS;
 }
 
 /* exported functions -------------------------------------------------------*/
@@ -104,6 +138,14 @@ platform_err_t svc_charge_config_init(svc_charge_battery_system_t system)
                                          system)
                                             ? SVC_CHARGE_VOLTAGE_12V_TARGET_MV
                                             : SVC_CHARGE_VOLTAGE_24V_TARGET_MV;
+    g_charge_config.maintenance
+        .voltage_target_mv = (SVC_CHARGE_BATTERY_SYSTEM_12V == system)
+                                 ? SVC_CHARGE_MAINTENANCE_12V_TARGET_MV
+                                 : SVC_CHARGE_MAINTENANCE_24V_TARGET_MV;
+    g_charge_config.maintenance
+        .recharge_voltage_mv = (SVC_CHARGE_BATTERY_SYSTEM_12V == system)
+                                   ? SVC_CHARGE_MAINTENANCE_12V_RECHARGE_MV
+                                   : SVC_CHARGE_MAINTENANCE_24V_RECHARGE_MV;
     return validate_config(&g_charge_config);
 }
 
