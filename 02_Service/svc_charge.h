@@ -39,7 +39,6 @@ typedef enum SVC_CHARGE_STATE_T
 } svc_charge_state_t;
 
 /* variables ----------------------------------------------------------------*/
-
 /* function  ----------------------------------------------------------------*/
 /* Forces the charge path off and resets the startup state. */
 platform_err_t svc_charge_init(svc_charge_battery_system_t system);

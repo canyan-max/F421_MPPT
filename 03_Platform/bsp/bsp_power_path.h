@@ -26,6 +26,11 @@ extern "C"
 #define BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE (950U)
 
 /* typedef ------------------------------------------------------------------*/
+typedef struct BSP_DISCHARGE_SHORT_STATE_T
+{
+    uint32_t generation;
+    uint8_t  latched;
+} bsp_discharge_short_state_t;
 
 /* variables ----------------------------------------------------------------*/
 
@@ -40,7 +45,16 @@ platform_err_t bsp_power_path_charge_start(uint16_t duty_permille);
 /* Main context only, while the charge PWM is running. */
 platform_err_t bsp_power_path_charge_set_duty(uint16_t duty_permille);
 platform_err_t bsp_power_path_charge_stop(void);
-/* PB11: zero requests off, nonzero requests on. */
+/* Main context after GPIO init, before EXINT enable: bind the fast callback.
+ * Subsequent same-owner init is allowed; never clears a latched short. */
+platform_err_t bsp_power_path_discharge_init(void);
+/* Main context: atomic snapshot, also catches active-low at startup. */
+bsp_discharge_short_state_t bsp_power_path_discharge_short_get(void);
+/* Main context: clear only this generation, PB0 high and no pending edge.
+ * The service must enforce the retry delay. Never enables PB11 itself. */
+platform_err_t bsp_power_path_discharge_short_rearm(uint32_t generation);
+/* PB11: zero requests off, nonzero requests on; BUSY means short interlock.
+ * All callers must use this gate. A new edge can still immediately turn OFF. */
 platform_err_t bsp_power_path_discharge_set(uint8_t enabled);
 
 #ifdef __cplusplus

@@ -1,0 +1,1392 @@
+diff --git a/02_Service/svc_charge.c b/02_Service/svc_charge.c
+index 8c85a1d..fb0384a 100644
+--- a/02_Service/svc_charge.c
++++ b/02_Service/svc_charge.c
+@@ -18,6 +18,8 @@
+ /* define   -----------------------------------------------------------------*/
+ #define SVC_CHARGE_CC_RELEASE_MARGIN_MA (100U)
+ #define SVC_CHARGE_TRACE_NEAR_DUTY_PERMILLE (930U)
++#define SVC_CHARGE_MPPT_RECAPTURE_OFF_MS (500U)
++#define SVC_CHARGE_MPPT_RECAPTURE_TIMEOUT_MS (5000U)
+ 
+ /* typedef ------------------------------------------------------------------*/
+ typedef enum SVC_CHARGE_TRACE_SLOT_T
+@@ -101,6 +103,11 @@ static svc_measure_value_t           g_charge_trace_measure;
+ static uint32_t                      g_charge_trace_measure_sequence;
+ static uint8_t                       g_charge_trace_measure_valid;
+ static svc_charge_trace_source_t     g_charge_trace_source;
++volatile uint8_t                     g_charge_mppt_recapture_request;
++volatile svc_charge_mppt_recapture_t g_charge_mppt_recapture;
++static uint8_t                       g_charge_mppt_recapture_active;
++static uint32_t                      g_charge_mppt_recapture_off_ticks;
++static uint32_t                      g_charge_mppt_recapture_elapsed_ticks;
+ 
+ /* private  functions  ------------------------------------------------------*/
+ static void reset_trace(void)
+@@ -538,6 +545,16 @@ static void process_wait_sample(void)
+             return;
+         }
+     }
++    if(0U != g_charge_mppt_recapture_active)
++    {
++        g_charge_mppt_recapture.initial_duty_permille = duty_permille;
++        g_charge_mppt_recapture
++            .input_voltage_restart_mv = value.input_voltage_mv;
++        g_charge_mppt_recapture
++            .battery_voltage_restart_mv = value.battery_voltage_mv;
++        g_charge_mppt_recapture
++            .input_current_restart_ma = value.input_current_ma;
++    }
+     status = bsp_power_path_charge_start(duty_permille);
+     if(PLATFORM_ERR_OK != status)
+     {
+@@ -1002,12 +1019,145 @@ static void process_fault_recovery(void)
+     }
+ }
+ 
++static void cancel_mppt_recapture(void)
++{
++    g_charge_mppt_recapture_request = 0U;
++    if(0U != g_charge_mppt_recapture_active)
++    {
++        g_charge_mppt_recapture_active = 0U;
++        g_charge_mppt_recapture.status = SVC_CHARGE_MPPT_RECAPTURE_ABORTED;
++    }
++}
++
++static void request_mppt_recapture(void)
++{
++    svc_measure_value_t         value;
++    svc_charge_mppt_recapture_t empty_result;
++    platform_err_t              status;
++    uint8_t                     request = g_charge_mppt_recapture_request;
++
++    g_charge_mppt_recapture_request = 0U;
++    if(0U != g_charge_mppt_recapture_active)
++    {
++        return;
++    }
++    if(1U != request || SVC_CHARGE_STATE_CONSTANT_CURRENT != g_charge_state ||
++       0U != g_charge_current_limited ||
++       SVC_CHARGE_FAULT_NONE != g_charge_fault ||
++       SVC_CHARGE_MPPT_PROBE_RUNNING == g_charge_mppt_probe.status)
++    {
++        g_charge_mppt_recapture.status = SVC_CHARGE_MPPT_RECAPTURE_REJECTED;
++        return;
++    }
++    status = svc_measure_get(&value);
++    if(PLATFORM_ERR_OK != status)
++    {
++        g_charge_mppt_recapture.status = SVC_CHARGE_MPPT_RECAPTURE_REJECTED;
++        return;
++    }
++    /* Clear only this result. Do not destroy either existing trace buffer. */
++    memset(&empty_result, 0, sizeof(empty_result));
++    g_charge_mppt_recapture                           = empty_result;
++    g_charge_mppt_recapture.duty_before_permille      = g_charge_duty_permille;
++    g_charge_mppt_recapture.input_voltage_before_mv   = value.input_voltage_mv;
++    g_charge_mppt_recapture.battery_voltage_before_mv = value
++                                                            .battery_voltage_mv;
++    g_charge_mppt_recapture.input_current_before_ma   = value.input_current_ma;
++    status = bsp_power_path_charge_stop();
++    if(PLATFORM_ERR_OK != status)
++    {
++        enter_fault(SVC_CHARGE_FAULT_POWER_PATH, status);
++        g_charge_mppt_recapture.fault       = g_charge_fault;
++        g_charge_mppt_recapture.state_after = g_charge_state;
++        g_charge_mppt_recapture.status      = SVC_CHARGE_MPPT_RECAPTURE_FAILED;
++        return;
++    }
++    g_charge_duty_permille = 0U;
++    svc_charge_protection_reset();
++    svc_charge_maintenance_reset();
++    reset_mppt_runtime();
++    reset_recovery_runtime();
++    g_charge_last_sequence                = svc_measure_get_sequence();
++    g_charge_stale_tick_count             = 0U;
++    g_charge_settle_tick_count            = 0U;
++    g_charge_duty_high_limited            = 0U;
++    g_charge_mppt_recapture_off_ticks     = 0U;
++    g_charge_mppt_recapture_elapsed_ticks = 0U;
++    g_charge_mppt_recapture_active        = 1U;
++    g_charge_status                       = PLATFORM_ERR_BUSY;
++    g_charge_state                 = SVC_CHARGE_STATE_MPPT_RECAPTURE_WAIT;
++    g_charge_mppt_recapture.status = SVC_CHARGE_MPPT_RECAPTURE_OFF_WAIT;
++}
++
++static void process_mppt_recapture_wait(void)
++{
++    svc_measure_value_t value;
++    platform_err_t      status;
++    svc_charge_fault_t  fault;
++    uint8_t             is_new;
++
++    status = get_new_measurement(&value, &is_new, &fault, 0U);
++    if(PLATFORM_ERR_OK != status)
++    {
++        enter_fault(fault, status);
++        return;
++    }
++    if(0U == is_new)
++    {
++        return;
++    }
++    g_charge_mppt_recapture_off_ticks++;
++    if(g_charge_mppt_recapture_off_ticks >=
++           delay_ms_to_ticks(SVC_CHARGE_MPPT_RECAPTURE_OFF_MS) &&
++       0U != svc_measure_is_ready())
++    {
++        /* All startup validation and D computation remain in WAIT_SAMPLE. */
++        return_to_wait_sample();
++        g_charge_mppt_recapture.status = SVC_CHARGE_MPPT_RECAPTURE_RESTARTING;
++    }
++}
++
++static void update_mppt_recapture_result(void)
++{
++    if(0U == g_charge_mppt_recapture_active)
++    {
++        return;
++    }
++    g_charge_mppt_recapture_elapsed_ticks++;
++    g_charge_mppt_recapture
++        .elapsed_ticks                  = g_charge_mppt_recapture_elapsed_ticks;
++    g_charge_mppt_recapture.state_after = g_charge_state;
++    g_charge_mppt_recapture.fault       = g_charge_fault;
++    if(SVC_CHARGE_STATE_FAULT == g_charge_state)
++    {
++        g_charge_mppt_recapture_active = 0U;
++        g_charge_mppt_recapture.status = SVC_CHARGE_MPPT_RECAPTURE_FAILED;
++    }
++    else if(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_state ||
++            SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state)
++    {
++        g_charge_mppt_recapture.settled_duty_permille = g_charge_duty_permille;
++        g_charge_mppt_recapture_active                = 0U;
++        g_charge_mppt_recapture.status = SVC_CHARGE_MPPT_RECAPTURE_DONE;
++    }
++    else if(g_charge_mppt_recapture_elapsed_ticks >=
++            delay_ms_to_ticks(SVC_CHARGE_MPPT_RECAPTURE_TIMEOUT_MS))
++    {
++        enter_fault(SVC_CHARGE_FAULT_SAMPLE_TIMEOUT, PLATFORM_ERR_TIMEOUT);
++        g_charge_mppt_recapture.state_after = g_charge_state;
++        g_charge_mppt_recapture.fault       = g_charge_fault;
++        g_charge_mppt_recapture_active      = 0U;
++        g_charge_mppt_recapture.status      = SVC_CHARGE_MPPT_RECAPTURE_FAILED;
++    }
++}
++
+ /* exported functions -------------------------------------------------------*/
+ platform_err_t svc_charge_init(svc_charge_battery_system_t system)
+ {
+     platform_err_t config_status = svc_charge_config_init(system);
+     platform_err_t stop_status;
+ 
++    cancel_mppt_recapture();
+     reset_trace();
+     svc_charge_protection_reset();
+     svc_charge_maintenance_reset();
+@@ -1081,7 +1231,15 @@ void svc_charge_process(void)
+     snapshot.state_before        = g_charge_state;
+     snapshot.cc_before           = g_charge_current_limited;
+     snapshot.mppt_compare_before = svc_charge_mppt_get_compare_count();
+-    if(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state)
++    if(0U != g_charge_mppt_recapture_request)
++    {
++        request_mppt_recapture();
++    }
++    if(SVC_CHARGE_STATE_MPPT_RECAPTURE_WAIT == g_charge_state)
++    {
++        process_mppt_recapture_wait();
++    }
++    else if(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state)
+     {
+         process_wait_sample();
+     }
+@@ -1113,11 +1271,13 @@ void svc_charge_process(void)
+     {
+         process_fault_recovery();
+     }
++    update_mppt_recapture_result();
+     update_trace(&snapshot);
+ }
+ 
+ platform_err_t svc_charge_stop(void)
+ {
++    cancel_mppt_recapture();
+     svc_charge_mppt_trace_freeze(SVC_CHARGE_MPPT_TRACE_STOP);
+     svc_charge_protection_reset();
+     svc_charge_maintenance_reset();
+diff --git a/02_Service/svc_charge.h b/02_Service/svc_charge.h
+index a07b6bb..e074017 100644
+--- a/02_Service/svc_charge.h
++++ b/02_Service/svc_charge.h
+@@ -30,15 +30,48 @@ typedef enum SVC_CHARGE_STATE_T
+     SVC_CHARGE_STATE_OFF = 0U,
+     SVC_CHARGE_STATE_WAIT_SAMPLE,
+     SVC_CHARGE_STATE_START_SETTLE,
+-    SVC_CHARGE_STATE_WAKE_CV          = 3U,
+-    SVC_CHARGE_STATE_CONSTANT_CURRENT = 4U,
+-    SVC_CHARGE_STATE_CONSTANT_VOLTAGE = 5U,
+-    SVC_CHARGE_STATE_FAULT            = 6U,
+-    SVC_CHARGE_STATE_FULL_WAIT        = 7U,
+-    SVC_CHARGE_STATE_MAINTENANCE      = 8U,
++    SVC_CHARGE_STATE_WAKE_CV             = 3U,
++    SVC_CHARGE_STATE_CONSTANT_CURRENT    = 4U,
++    SVC_CHARGE_STATE_CONSTANT_VOLTAGE    = 5U,
++    SVC_CHARGE_STATE_FAULT               = 6U,
++    SVC_CHARGE_STATE_FULL_WAIT           = 7U,
++    SVC_CHARGE_STATE_MAINTENANCE         = 8U,
++    SVC_CHARGE_STATE_MPPT_RECAPTURE_WAIT = 9U,
+ } svc_charge_state_t;
+ 
++typedef enum SVC_CHARGE_MPPT_RECAPTURE_STATUS_T
++{
++    SVC_CHARGE_MPPT_RECAPTURE_IDLE = 0U,
++    SVC_CHARGE_MPPT_RECAPTURE_OFF_WAIT,
++    SVC_CHARGE_MPPT_RECAPTURE_RESTARTING,
++    SVC_CHARGE_MPPT_RECAPTURE_DONE,
++    SVC_CHARGE_MPPT_RECAPTURE_FAILED,
++    SVC_CHARGE_MPPT_RECAPTURE_REJECTED,
++    SVC_CHARGE_MPPT_RECAPTURE_ABORTED,
++} svc_charge_mppt_recapture_status_t;
++
++typedef struct SVC_CHARGE_MPPT_RECAPTURE_T
++{
++    svc_charge_mppt_recapture_status_t status;
++    uint16_t                           duty_before_permille;
++    uint16_t initial_duty_permille; /* Requested after PWM-off measurements. */
++    uint16_t settled_duty_permille; /* Actual D at startup-settle completion. */
++    uint32_t input_voltage_before_mv;
++    uint32_t battery_voltage_before_mv;
++    uint32_t input_current_before_ma;
++    uint32_t input_voltage_restart_mv;
++    uint32_t battery_voltage_restart_mv;
++    uint32_t input_current_restart_ma;
++    uint32_t elapsed_ticks; /* 10 ms calls since accepting the request. */
++    svc_charge_state_t state_after;
++    svc_charge_fault_t fault;
++} svc_charge_mppt_recapture_t;
++
+ /* variables ----------------------------------------------------------------*/
++/* Main-context one-shot diagnostic. Set request=1 while MPPT owns D.
++ * Stops PWM and reuses the normal startup checks; default disabled. */
++extern volatile uint8_t                     g_charge_mppt_recapture_request;
++extern volatile svc_charge_mppt_recapture_t g_charge_mppt_recapture;
+ 
+ /* function  ----------------------------------------------------------------*/
+ /* Forces the charge path off and resets the startup state. */
+diff --git a/02_Service/svc_charge_mppt.c b/02_Service/svc_charge_mppt.c
+index fca8932..da5a2e5 100644
+--- a/02_Service/svc_charge_mppt.c
++++ b/02_Service/svc_charge_mppt.c
+@@ -12,10 +12,13 @@
+ #include "svc_charge_config.h"
+ #include "bsp_power_path.h"
+ /* define   -----------------------------------------------------------------*/
+-#define SVC_CHARGE_MPPT_DUTY_STEP_PERMILLE (1U)
++#define SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE (1U)
++#define SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE (1U)
++#define SVC_CHARGE_MPPT_PROBE_STEP_PERMILLE (1U)
+ #define SVC_CHARGE_MPPT_SETTLE_TICKS (300U / SVC_CHARGE_PROCESS_PERIOD_MS)
+ #define SVC_CHARGE_MPPT_MEASURE_TICKS (200U / SVC_CHARGE_PROCESS_PERIOD_MS)
+ #define SVC_CHARGE_MPPT_POWER_DEADBAND_UW (100000U)
++#define SVC_CHARGE_MPPT_TREND_MAX_COMPARISONS (8U)
+ 
+ /* typedef ------------------------------------------------------------------*/
+ 
+@@ -34,6 +37,9 @@ uint32_t                         g_charge_mppt_power_after_uw;
+ uint8_t                          g_charge_mppt_last_direction_increase;
+ int8_t                           g_charge_mppt_power_change;
+ uint32_t                         g_charge_mppt_compare_count;
++static uint32_t                  g_charge_mppt_trend_reference_power_uw;
++static uint8_t                   g_charge_mppt_trend_compare_count;
++static uint8_t                   g_charge_mppt_trend_reversed;
+ static uint16_t                  g_charge_mppt_expected_duty_permille;
+ static uint16_t                  g_charge_mppt_reference_duty_permille;
+ static uint32_t                  g_charge_mppt_settle_tick_count;
+@@ -46,10 +52,20 @@ volatile svc_charge_mppt_trace_freeze_t g_charge_mppt_trace_freeze;
+ static uint32_t                         g_charge_mppt_trace_sequence;
+ static uint32_t                         g_charge_mppt_trace_service_tick;
+ static uint32_t                         g_charge_mppt_trace_measure_sequence;
++volatile uint8_t                        g_charge_mppt_probe_request;
++volatile svc_charge_mppt_probe_t        g_charge_mppt_probe;
++static uint8_t                          g_charge_mppt_probe_phase;
++static uint16_t                         g_charge_mppt_probe_origin_duty;
++static uint16_t                         g_charge_mppt_probe_trial_duty;
++static uint64_t                         g_charge_mppt_probe_voltage_sum_mv;
++static uint64_t                         g_charge_mppt_probe_battery_sum_mv;
++static uint64_t                         g_charge_mppt_probe_current_sum_ma;
+ 
+ /* private  functions  ------------------------------------------------------*/
+ static void save_comparison(const svc_measure_value_t      *p_value,
+-                            const svc_charge_mppt_result_t *p_result)
++                            const svc_charge_mppt_result_t *p_result,
++                            uint32_t trend_reference_power_uw,
++                            uint8_t  trend_compare_count)
+ {
+     svc_charge_mppt_trace_t snapshot = {0};
+     uint16_t                index    = g_charge_mppt_trace_write_index;
+@@ -61,17 +77,20 @@ static void save_comparison(const svc_measure_value_t      *p_value,
+         return;
+     }
+     g_charge_mppt_trace_sequence++;
+-    snapshot.sequence               = g_charge_mppt_trace_sequence;
+-    snapshot.service_tick           = g_charge_mppt_trace_service_tick;
+-    snapshot.measure_sequence       = g_charge_mppt_trace_measure_sequence;
+-    snapshot.compare_count          = g_charge_mppt_compare_count;
+-    snapshot.power_before_uw        = g_charge_mppt_power_before_uw;
+-    snapshot.power_after_uw         = g_charge_mppt_power_after_uw;
+-    snapshot.input_voltage_end_mv   = p_value->input_voltage_mv;
+-    snapshot.battery_voltage_end_mv = p_value->battery_voltage_mv;
+-    snapshot.input_current_end_ma   = p_value->input_current_ma;
+-    snapshot.duty_before_permille   = g_charge_mppt_duty_before_permille;
+-    snapshot.duty_after_permille    = g_charge_mppt_duty_after_permille;
++    snapshot.sequence                 = g_charge_mppt_trace_sequence;
++    snapshot.service_tick             = g_charge_mppt_trace_service_tick;
++    snapshot.measure_sequence         = g_charge_mppt_trace_measure_sequence;
++    snapshot.compare_count            = g_charge_mppt_compare_count;
++    snapshot.power_before_uw          = g_charge_mppt_power_before_uw;
++    snapshot.power_after_uw           = g_charge_mppt_power_after_uw;
++    snapshot.trend_reference_power_uw = trend_reference_power_uw;
++    snapshot.trend_compare_count      = trend_compare_count;
++    snapshot.trend_reversed           = g_charge_mppt_trend_reversed;
++    snapshot.input_voltage_end_mv     = p_value->input_voltage_mv;
++    snapshot.battery_voltage_end_mv   = p_value->battery_voltage_mv;
++    snapshot.input_current_end_ma     = p_value->input_current_ma;
++    snapshot.duty_before_permille     = g_charge_mppt_duty_before_permille;
++    snapshot.duty_after_permille      = g_charge_mppt_duty_after_permille;
+     snapshot.next_duty_requested_permille = p_result->duty_permille;
+     snapshot.perturb_increase        = g_charge_mppt_last_direction_increase;
+     snapshot.next_direction_increase = g_charge_mppt_direction_increase;
+@@ -103,16 +122,149 @@ static void restart_window(void)
+ 
+ static void invalidate_comparison(uint16_t duty_permille)
+ {
+-    g_charge_mppt_previous_power_valid   = 0U;
+-    g_charge_mppt_perturb_pending        = 0U;
+-    g_charge_mppt_expected_duty_permille = duty_permille;
+-    g_charge_mppt_duty_known             = 1U;
++    g_charge_mppt_previous_power_valid     = 0U;
++    g_charge_mppt_perturb_pending          = 0U;
++    g_charge_mppt_trend_reference_power_uw = 0U;
++    g_charge_mppt_trend_compare_count      = 0U;
++    g_charge_mppt_trend_reversed           = 0U;
++    g_charge_mppt_expected_duty_permille   = duty_permille;
++    g_charge_mppt_duty_known               = 1U;
+     restart_window();
+ }
+ 
++static void abort_probe(void)
++{
++    g_charge_mppt_probe_request = 0U;
++    if(0U != g_charge_mppt_probe_phase)
++    {
++        g_charge_mppt_probe_phase  = 0U;
++        g_charge_mppt_probe.status = SVC_CHARGE_MPPT_PROBE_ABORTED;
++    }
++}
++
++static void restart_probe_window(void)
++{
++    restart_window();
++    g_charge_mppt_probe_voltage_sum_mv = 0U;
++    g_charge_mppt_probe_battery_sum_mv = 0U;
++    g_charge_mppt_probe_current_sum_ma = 0U;
++}
++
++static void start_probe(uint16_t current_duty_permille)
++{
++    static const svc_charge_mppt_probe_t g_empty_probe =
++        {SVC_CHARGE_MPPT_PROBE_IDLE,
++         0U,
++         0U,
++         0U,
++         {0},
++         {0},
++         {0},
++         {0},
++         0U,
++         0U,
++         0,
++         0};
++    uint8_t request = g_charge_mppt_probe_request;
++
++    g_charge_mppt_probe_request = 0U;
++    g_charge_mppt_probe         = g_empty_probe;
++    if((1U != request && 2U != request) ||
++       (1U == request &&
++        current_duty_permille <= BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE) ||
++       (2U == request &&
++        current_duty_permille >= BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE))
++    {
++        g_charge_mppt_probe.status = SVC_CHARGE_MPPT_PROBE_REJECTED;
++        return;
++    }
++    invalidate_comparison(current_duty_permille);
++    g_charge_mppt_probe_origin_duty = current_duty_permille;
++    g_charge_mppt_probe_trial_duty =
++        (1U == request)
++            ? current_duty_permille - SVC_CHARGE_MPPT_PROBE_STEP_PERMILLE
++            : current_duty_permille + SVC_CHARGE_MPPT_PROBE_STEP_PERMILLE;
++    g_charge_mppt_probe.origin_duty_permille = g_charge_mppt_probe_origin_duty;
++    g_charge_mppt_probe.probe_duty_permille  = g_charge_mppt_probe_trial_duty;
++    g_charge_mppt_probe_phase                = 1U;
++    restart_probe_window();
++    g_charge_mppt_probe.status = SVC_CHARGE_MPPT_PROBE_RUNNING;
++}
++
++static void save_probe_window(svc_charge_mppt_result_t *p_result)
++{
++    svc_charge_mppt_probe_point_t point;
++    uint64_t                      power_before_uw;
++    uint64_t                      power_after_uw;
++
++    /* Called only after a complete, range-checked 200 ms power average. */
++    point.power_uw           = g_charge_mppt_power_raw;
++    point.input_voltage_mv   = (uint32_t)(g_charge_mppt_probe_voltage_sum_mv /
++                                          g_charge_mppt_sample_count);
++    point.battery_voltage_mv = (uint32_t)(g_charge_mppt_probe_battery_sum_mv /
++                                          g_charge_mppt_sample_count);
++    point.input_current_ma   = (uint32_t)(g_charge_mppt_probe_current_sum_ma /
++                                          g_charge_mppt_sample_count);
++    point.service_tick       = g_charge_mppt_trace_service_tick;
++    if(1U == g_charge_mppt_probe_phase)
++    {
++        g_charge_mppt_probe.a_before = point;
++        p_result->duty_permille      = g_charge_mppt_probe_trial_duty;
++    }
++    else if(2U == g_charge_mppt_probe_phase)
++    {
++        g_charge_mppt_probe.b_early = point;
++    }
++    else if(3U == g_charge_mppt_probe_phase)
++    {
++        g_charge_mppt_probe.b_late = point;
++        p_result->duty_permille    = g_charge_mppt_probe_origin_duty;
++    }
++    else
++    {
++        g_charge_mppt_probe.a_after = point;
++        /* Equal 500 ms windows: B samples lie 1/3 and 2/3 between A samples.
++         * Linear drift compensation is diagnostic, not proof of stationarity.
++         */
++        power_before_uw = g_charge_mppt_probe.a_before.power_uw;
++        power_after_uw  = point.power_uw;
++        g_charge_mppt_probe.reference_early_uw = (uint32_t)((power_before_uw *
++                                                                 2U +
++                                                             power_after_uw) /
++                                                            3U);
++        g_charge_mppt_probe.reference_late_uw  = (uint32_t)((power_before_uw +
++                                                             power_after_uw *
++                                                                 2U) /
++                                                            3U);
++        g_charge_mppt_probe
++            .delta_early_uw = (int64_t)g_charge_mppt_probe.b_early.power_uw -
++                              g_charge_mppt_probe.reference_early_uw;
++        g_charge_mppt_probe
++            .delta_late_uw = (int64_t)g_charge_mppt_probe.b_late.power_uw -
++                             g_charge_mppt_probe.reference_late_uw;
++    }
++    g_charge_mppt_probe.completed_points = g_charge_mppt_probe_phase;
++    g_charge_mppt_probe_phase++;
++    p_result->duty_changed = (p_result->duty_permille !=
++                              g_charge_mppt_expected_duty_permille)
++                                 ? 1U
++                                 : 0U;
++    g_charge_mppt_expected_duty_permille = p_result->duty_permille;
++    restart_probe_window();
++    if(5U == g_charge_mppt_probe_phase)
++    {
++        g_charge_mppt_probe_phase = 0U;
++        invalidate_comparison(p_result->duty_permille);
++        /* Normal tracking rebuilds its baseline in the next 500 ms window. */
++        g_charge_mppt_probe.status = SVC_CHARGE_MPPT_PROBE_DONE;
++    }
++}
++
+ static void perturb_duty(uint16_t                  current_duty_permille,
+                          svc_charge_mppt_result_t *p_result)
+ {
++    uint8_t direction_before = g_charge_mppt_direction_increase;
++
+     /* Reverse at a boundary before stepping. Never compare an unchanged D. */
+     if(BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE == current_duty_permille)
+     {
+@@ -122,15 +274,36 @@ static void perturb_duty(uint16_t                  current_duty_permille,
+     {
+         g_charge_mppt_direction_increase = 1U;
+     }
++    if(direction_before != g_charge_mppt_direction_increase)
++    {
++        g_charge_mppt_trend_reference_power_uw = g_charge_mppt_power_raw;
++        g_charge_mppt_trend_compare_count      = 0U;
++    }
+     if(0U != g_charge_mppt_direction_increase)
+     {
+-        p_result->duty_permille = current_duty_permille +
+-                                  SVC_CHARGE_MPPT_DUTY_STEP_PERMILLE;
++        if((BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE - current_duty_permille) <
++           SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE)
++        {
++            p_result->duty_permille = BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE;
++        }
++        else
++        {
++            p_result->duty_permille = current_duty_permille +
++                                      SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE;
++        }
+     }
+     else
+     {
+-        p_result->duty_permille = current_duty_permille -
+-                                  SVC_CHARGE_MPPT_DUTY_STEP_PERMILLE;
++        if((current_duty_permille - BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE) <
++           SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE)
++        {
++            p_result->duty_permille = BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE;
++        }
++        else
++        {
++            p_result->duty_permille = current_duty_permille -
++                                      SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE;
++        }
+     }
+     p_result->duty_changed                = 1U;
+     g_charge_mppt_reference_duty_permille = current_duty_permille;
+@@ -180,24 +353,29 @@ void svc_charge_mppt_trace_set_context(uint32_t service_tick,
+ 
+ void svc_charge_mppt_reset(void)
+ {
+-    g_charge_mppt_power_raw               = 0U;
+-    g_charge_mppt_previous_power_raw      = 0U;
+-    g_charge_mppt_previous_power_valid    = 0U;
+-    g_charge_mppt_direction_increase      = 1U;
+-    g_charge_mppt_duty_known              = 0U;
+-    g_charge_mppt_perturb_pending         = 0U;
+-    g_charge_mppt_duty_before_permille    = 0U;
+-    g_charge_mppt_duty_after_permille     = 0U;
+-    g_charge_mppt_power_before_uw         = 0U;
+-    g_charge_mppt_power_after_uw          = 0U;
+-    g_charge_mppt_last_direction_increase = 0U;
+-    g_charge_mppt_power_change            = 0;
+-    g_charge_mppt_compare_count           = 0U;
++    abort_probe();
++    g_charge_mppt_power_raw                = 0U;
++    g_charge_mppt_previous_power_raw       = 0U;
++    g_charge_mppt_previous_power_valid     = 0U;
++    g_charge_mppt_direction_increase       = 1U;
++    g_charge_mppt_duty_known               = 0U;
++    g_charge_mppt_perturb_pending          = 0U;
++    g_charge_mppt_duty_before_permille     = 0U;
++    g_charge_mppt_duty_after_permille      = 0U;
++    g_charge_mppt_power_before_uw          = 0U;
++    g_charge_mppt_power_after_uw           = 0U;
++    g_charge_mppt_last_direction_increase  = 0U;
++    g_charge_mppt_power_change             = 0;
++    g_charge_mppt_compare_count            = 0U;
++    g_charge_mppt_trend_reference_power_uw = 0U;
++    g_charge_mppt_trend_compare_count      = 0U;
++    g_charge_mppt_trend_reversed           = 0U;
+     restart_window();
+ }
+ 
+ void svc_charge_mppt_pause(uint16_t current_duty_permille)
+ {
++    abort_probe();
+     invalidate_comparison(current_duty_permille);
+ }
+ 
+@@ -211,6 +389,8 @@ platform_err_t svc_charge_mppt_update(const svc_measure_value_t *p_value,
+                                       svc_charge_mppt_result_t *p_result)
+ {
+     uint64_t average_power_uw;
++    uint32_t trend_reference_power_uw;
++    uint8_t  trend_compare_count;
+     uint8_t  comparison_ready = 0U;
+ 
+     if(NULL == p_value || NULL == p_result ||
+@@ -229,8 +409,21 @@ platform_err_t svc_charge_mppt_update(const svc_measure_value_t *p_value,
+     if(0U == g_charge_mppt_duty_known ||
+        g_charge_mppt_expected_duty_permille != current_duty_permille)
+     {
++        if(0U != g_charge_mppt_probe_phase)
++        {
++            abort_probe();
++        }
+         invalidate_comparison(current_duty_permille);
+     }
++    if(0U == g_charge_mppt_probe_phase && 0U != g_charge_mppt_probe_request)
++    {
++        start_probe(current_duty_permille);
++    }
++    else if(0U != g_charge_mppt_probe_phase)
++    {
++        /* A second request cannot restart or extend an active probe. */
++        g_charge_mppt_probe_request = 0U;
++    }
+     if(g_charge_mppt_settle_tick_count < SVC_CHARGE_MPPT_SETTLE_TICKS)
+     {
+         g_charge_mppt_settle_tick_count++;
+@@ -240,6 +433,12 @@ platform_err_t svc_charge_mppt_update(const svc_measure_value_t *p_value,
+     g_charge_mppt_power_sum_raw += (uint64_t)p_value->battery_voltage_mv *
+                                    p_value->input_current_ma;
+     g_charge_mppt_sample_count++;
++    if(0U != g_charge_mppt_probe_phase)
++    {
++        g_charge_mppt_probe_voltage_sum_mv += p_value->input_voltage_mv;
++        g_charge_mppt_probe_battery_sum_mv += p_value->battery_voltage_mv;
++        g_charge_mppt_probe_current_sum_ma += p_value->input_current_ma;
++    }
+     if(g_charge_mppt_sample_count < SVC_CHARGE_MPPT_MEASURE_TICKS)
+     {
+         return PLATFORM_ERR_OK;
+@@ -247,9 +446,16 @@ platform_err_t svc_charge_mppt_update(const svc_measure_value_t *p_value,
+     average_power_uw = g_charge_mppt_power_sum_raw / g_charge_mppt_sample_count;
+     if(UINT32_MAX < average_power_uw)
+     {
++        abort_probe();
++        invalidate_comparison(current_duty_permille);
+         return PLATFORM_ERR_PARAM;
+     }
+     g_charge_mppt_power_raw = (uint32_t)average_power_uw;
++    if(0U != g_charge_mppt_probe_phase)
++    {
++        save_probe_window(p_result);
++        return PLATFORM_ERR_OK;
++    }
+     if(0U != g_charge_mppt_previous_power_valid &&
+        0U != g_charge_mppt_perturb_pending)
+     {
+@@ -264,7 +470,9 @@ platform_err_t svc_charge_mppt_update(const svc_measure_value_t *p_value,
+                 : 0U;
+         g_charge_mppt_direction_increase =
+             g_charge_mppt_last_direction_increase;
+-        g_charge_mppt_power_change = 0;
++        g_charge_mppt_power_change   = 0;
++        g_charge_mppt_trend_reversed = 0U;
++        g_charge_mppt_trend_compare_count++;
+         if(g_charge_mppt_power_raw > g_charge_mppt_previous_power_raw &&
+            (g_charge_mppt_power_raw - g_charge_mppt_previous_power_raw) >
+                SVC_CHARGE_MPPT_POWER_DEADBAND_UW)
+@@ -279,16 +487,44 @@ platform_err_t svc_charge_mppt_update(const svc_measure_value_t *p_value,
+             g_charge_mppt_direction_increase =
+                 (0U == g_charge_mppt_last_direction_increase) ? 1U : 0U;
+         }
+-        /* Inside the noise band retain direction, without declaring a gain. */
++        /* Do not discard a cumulative loss as successive sub-deadband steps.
++         * This bounded reference is only a trend guard, not a global MPP. */
++        if(0 <= g_charge_mppt_power_change &&
++           g_charge_mppt_trend_reference_power_uw > g_charge_mppt_power_raw &&
++           (g_charge_mppt_trend_reference_power_uw - g_charge_mppt_power_raw) >
++               SVC_CHARGE_MPPT_POWER_DEADBAND_UW)
++        {
++            g_charge_mppt_power_change = -1;
++            g_charge_mppt_direction_increase =
++                (0U == g_charge_mppt_last_direction_increase) ? 1U : 0U;
++            g_charge_mppt_trend_reversed = 1U;
++        }
+         g_charge_mppt_compare_count++;
+         comparison_ready = 1U;
+     }
+     g_charge_mppt_previous_power_raw   = g_charge_mppt_power_raw;
+     g_charge_mppt_previous_power_valid = 1U;
++    /* Preserve the decision reference; rebasing must not alter the trace. */
++    trend_reference_power_uw = g_charge_mppt_trend_reference_power_uw;
++    trend_compare_count      = g_charge_mppt_trend_compare_count;
++    if(0U == comparison_ready ||
++       g_charge_mppt_direction_increase !=
++           g_charge_mppt_last_direction_increase ||
++       g_charge_mppt_trend_compare_count >=
++           SVC_CHARGE_MPPT_TREND_MAX_COMPARISONS)
++    {
++        g_charge_mppt_trend_reference_power_uw = g_charge_mppt_power_raw;
++        g_charge_mppt_trend_compare_count      = 0U;
++    }
++    else if(g_charge_mppt_power_raw > g_charge_mppt_trend_reference_power_uw)
++    {
++        g_charge_mppt_trend_reference_power_uw = g_charge_mppt_power_raw;
++    }
+     perturb_duty(current_duty_permille, p_result);
+     if(0U != comparison_ready)
+     {
+-        save_comparison(p_value, p_result);
++        save_comparison(p_value, p_result, trend_reference_power_uw,
++                        trend_compare_count);
+     }
+     return PLATFORM_ERR_OK;
+ }
+diff --git a/02_Service/svc_charge_mppt.h b/02_Service/svc_charge_mppt.h
+index 36d5ba7..01e50a4 100644
+--- a/02_Service/svc_charge_mppt.h
++++ b/02_Service/svc_charge_mppt.h
+@@ -51,8 +51,45 @@ typedef struct SVC_CHARGE_MPPT_TRACE_T
+     uint8_t  next_direction_increase;
+     int8_t   power_change;
+     uint8_t  valid;
++    uint32_t trend_reference_power_uw; /* Bounded same-direction reference. */
++    uint8_t  trend_compare_count;
++    uint8_t  trend_reversed; /* Cumulative loss, not adjacent-window loss. */
+ } svc_charge_mppt_trace_t;
+ 
++typedef enum SVC_CHARGE_MPPT_PROBE_STATUS_T
++{
++    SVC_CHARGE_MPPT_PROBE_IDLE = 0U,
++    SVC_CHARGE_MPPT_PROBE_RUNNING,
++    SVC_CHARGE_MPPT_PROBE_DONE,
++    SVC_CHARGE_MPPT_PROBE_ABORTED,
++    SVC_CHARGE_MPPT_PROBE_REJECTED,
++} svc_charge_mppt_probe_status_t;
++
++typedef struct SVC_CHARGE_MPPT_PROBE_POINT_T
++{
++    uint32_t power_uw;
++    uint32_t input_voltage_mv; /* Same 200 ms averages as power_uw. */
++    uint32_t battery_voltage_mv;
++    uint32_t input_current_ma; /* Buck output bus, not PV input current. */
++    uint32_t service_tick;     /* End of this measurement window. */
++} svc_charge_mppt_probe_point_t;
++
++typedef struct SVC_CHARGE_MPPT_PROBE_T
++{
++    svc_charge_mppt_probe_status_t status; /* DONE publishes all results. */
++    uint16_t                       origin_duty_permille;
++    uint16_t                       probe_duty_permille;
++    uint8_t                        completed_points;
++    svc_charge_mppt_probe_point_t  a_before;
++    svc_charge_mppt_probe_point_t  b_early;
++    svc_charge_mppt_probe_point_t  b_late;
++    svc_charge_mppt_probe_point_t  a_after;
++    uint32_t reference_early_uw; /* Linear interpolation of A measurements. */
++    uint32_t reference_late_uw;
++    int64_t  delta_early_uw; /* B minus interpolated A; not a control input. */
++    int64_t  delta_late_uw;
++} svc_charge_mppt_probe_t;
++
+ typedef struct SVC_CHARGE_MPPT_RESULT_T
+ {
+     uint16_t duty_permille;
+@@ -66,6 +103,10 @@ extern volatile svc_charge_mppt_trace_t
+ extern volatile uint16_t g_charge_mppt_trace_write_index;
+ extern volatile uint16_t g_charge_mppt_trace_count;
+ extern volatile svc_charge_mppt_trace_freeze_t g_charge_mppt_trace_freeze;
++/* Main-context one-shot diagnostic: 1 requests D-1, 2 requests D+1.
++ * Only consumed while MPPT owns D. Zero by default. No PWM/CPU stop. */
++extern volatile uint8_t                 g_charge_mppt_probe_request;
++extern volatile svc_charge_mppt_probe_t g_charge_mppt_probe;
+ 
+ /* function  ----------------------------------------------------------------*/
+ /* Main context only. Diagnostic history survives tracker reset/pause. */
+
+diff --git a/.agents/scripts/test-mppt-trend.ps1 b/.agents/scripts/test-mppt-trend.ps1
+new file mode 100644
+--- /dev/null
++++ b/.agents/scripts/test-mppt-trend.ps1
+@@ -0,0 +1,366 @@
++param(
++    [string]$Gcc = 'D:\software_config\mingw64\mingw64\bin\gcc.exe'
++)
++
++$ErrorActionPreference = 'Stop'
++if (-not (Test-Path -LiteralPath $Gcc)) {
++    throw "Host compiler unavailable: $Gcc"
++}
++$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
++$testDirectory = Join-Path ([IO.Path]::GetTempPath()) ('mppt-trend-' + [guid]::NewGuid())
++New-Item -ItemType Directory -Path $testDirectory | Out-Null
++$harness = @'
++#include <assert.h>
++#include <stdio.h>
++
++#ifndef SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE
++#define SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE SVC_CHARGE_MPPT_DUTY_STEP_PERMILLE
++#define SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE SVC_CHARGE_MPPT_DUTY_STEP_PERMILLE
++#endif
++
++static svc_measure_value_t g_test_value;
++static uint16_t g_test_duty;
++
++static void start_test(uint16_t duty, uint32_t voltage, uint32_t current)
++{
++    svc_charge_mppt_reset();
++    svc_charge_mppt_trace_clear();
++    g_test_duty = duty;
++    g_test_value.battery_voltage_mv = voltage;
++    g_test_value.input_voltage_mv = 18000U;
++    g_test_value.input_current_ma = current;
++}
++
++static void window(uint32_t current)
++{
++    svc_charge_mppt_result_t result;
++    unsigned int i;
++    g_test_value.input_current_ma = current;
++    for(i = 0U; i < 50U; i++)
++    {
++        assert(PLATFORM_ERR_OK == svc_charge_mppt_update(
++            &g_test_value, g_test_duty, &result));
++        assert(result.duty_permille >= 150U);
++        assert(result.duty_permille <= 950U);
++        if(i < 49U)
++        {
++            assert(0U == result.duty_changed);
++        }
++        g_test_duty = result.duty_permille;
++    }
++}
++
++int main(void)
++{
++    svc_charge_mppt_result_t result;
++    uint32_t i;
++    uint32_t saved_sequence;
++    uint16_t saved_index;
++
++    /* Identical decreasing synthetic measurements on old and new source. */
++    start_test(842U, 14000U, 2000U);
++    window(2000U);
++    window(1996U);
++    assert(0 == g_charge_mppt_power_change);
++    window(1992U);
++#if MPPT_TREND_TEST
++    assert(-1 == g_charge_mppt_power_change);
++    assert(0U == g_charge_mppt_direction_increase);
++    assert(1U == g_charge_mppt_trace[1U].trend_reversed);
++    assert(28000000U == g_charge_mppt_trace[1U].trend_reference_power_uw);
++    assert(2U == g_charge_mppt_trace[1U].trend_compare_count);
++    assert(g_test_duty == g_charge_mppt_trace[1U].next_duty_requested_permille);
++    assert(0U == g_charge_mppt_trend_compare_count);
++#else
++    assert(0 == g_charge_mppt_power_change);
++    assert(1U == g_charge_mppt_direction_increase);
++#endif
++    printf("cumulative loss: direction=%u change=%d D=%u\n",
++        g_charge_mppt_direction_increase, g_charge_mppt_power_change,
++        g_test_duty);
++
++    /* Both original perturbation directions: significant gain/loss. */
++    for(i = 0U; i < 2U; i++)
++    {
++        start_test(800U, 14000U, 2000U);
++        g_charge_mppt_direction_increase = (uint8_t)i;
++        window(2000U);
++        window(2010U);
++        assert(1 == g_charge_mppt_power_change);
++        assert(i == g_charge_mppt_direction_increase);
++        window(2000U);
++        assert(-1 == g_charge_mppt_power_change);
++        assert((1U - i) == g_charge_mppt_direction_increase);
++    }
++
++#if MPPT_TREND_TEST
++    /* Symmetric cumulative decline while decreasing D. */
++    start_test(800U, 14000U, 2000U);
++    g_charge_mppt_direction_increase = 0U;
++    window(2000U);
++    window(1996U);
++    window(1992U);
++    assert(1U == g_charge_mppt_direction_increase);
++    assert(1U == g_charge_mppt_trace[1U].trend_reversed);
++
++    /* Exactly 0.1 W retains direction; cumulative >0.1 W reverses. */
++    start_test(800U, 10000U, 2000U);
++    window(2000U);
++    window(1990U);
++    assert(0 == g_charge_mppt_power_change);
++    window(1989U);
++    assert(-1 == g_charge_mppt_power_change);
++
++    /* Reference expires after eight comparisons, even with small drift. */
++    start_test(800U, 10000U, 2000U);
++    window(2000U);
++    for(i = 1U; i <= 9U; i++)
++    {
++        window(2000U - i);
++        assert(0 == g_charge_mppt_power_change);
++    }
++    assert(19920000U == g_charge_mppt_trace[8U].trend_reference_power_uw);
++    assert(1U == g_charge_mppt_trace[8U].trend_compare_count);
++
++    /* Follow a same-direction peak, not only the initial reference. */
++    start_test(800U, 10000U, 2000U);
++    window(2000U);
++    window(2006U);
++    window(2002U);
++    window(1998U);
++    window(1994U);
++    assert(1U == g_charge_mppt_trace[3U].trend_reversed);
++
++    /* pause/reset and unexpected actual D discard the old trend. */
++    svc_charge_mppt_pause(g_test_duty);
++    assert(0U == g_charge_mppt_trend_reference_power_uw);
++    window(1800U);
++    assert(18000000U == g_charge_mppt_trend_reference_power_uw);
++    g_test_duty += 5U;
++    window(1700U);
++    assert(17000000U == g_charge_mppt_trend_reference_power_uw);
++
++    /* One-shot A / B early / B late / A, with no tracking decisions. */
++    for(i = 1U; i <= 2U; i++)
++    {
++        start_test(832U, 14000U, 2000U);
++        g_charge_mppt_probe_request = (uint8_t)i;
++        window(2000U);
++        assert(SVC_CHARGE_MPPT_PROBE_RUNNING == g_charge_mppt_probe.status);
++        assert(1U == g_charge_mppt_probe.completed_points);
++        assert((1U == i ? 831U : 833U) == g_test_duty);
++        window(1980U);
++        assert((1U == i ? 831U : 833U) == g_test_duty);
++        assert(2U == g_charge_mppt_probe.completed_points);
++        window(1980U);
++        assert(832U == g_test_duty);
++        window(2000U);
++        assert(832U == g_test_duty);
++        assert(SVC_CHARGE_MPPT_PROBE_DONE == g_charge_mppt_probe.status);
++        assert(4U == g_charge_mppt_probe.completed_points);
++        assert(-280000 == g_charge_mppt_probe.delta_early_uw);
++        assert(-280000 == g_charge_mppt_probe.delta_late_uw);
++        assert(18000U == g_charge_mppt_probe.b_late.input_voltage_mv);
++        assert(1980U == g_charge_mppt_probe.b_late.input_current_ma);
++        assert(0U == g_charge_mppt_compare_count);
++        assert(0U == g_charge_mppt_trace_count);
++        window(2000U);
++        assert((832U + SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE) == g_test_duty);
++        /* Fresh normal baseline, not a compare. */
++        assert(0U == g_charge_mppt_compare_count);
++        window(2000U);
++        assert(1U == g_charge_mppt_compare_count);
++        svc_charge_mppt_reset();
++        assert(SVC_CHARGE_MPPT_PROBE_DONE == g_charge_mppt_probe.status);
++    }
++
++    /* A transient B loss recovers when the unchanged trial D is held longer. */
++    start_test(832U, 14000U, 2000U);
++    g_charge_mppt_probe_request = 1U;
++    window(2000U);
++    window(1980U);
++    window(2000U);
++    window(2000U);
++    assert(-280000 == g_charge_mppt_probe.delta_early_uw);
++    assert(0 == g_charge_mppt_probe.delta_late_uw);
++
++    /* Equal linear environmental drift cancels, without a fabricated gain. */
++    start_test(832U, 14000U, 2000U);
++    g_charge_mppt_probe_request = 1U;
++    window(2000U);
++    window(2010U);
++    window(2020U);
++    window(2030U);
++    assert(0 == g_charge_mppt_probe.delta_early_uw);
++    assert(0 == g_charge_mppt_probe.delta_late_uw);
++
++    /* Frozen ring does not suppress the independent probe snapshot. */
++    start_test(832U, 14000U, 2000U);
++    g_charge_mppt_trace_freeze = SVC_CHARGE_MPPT_TRACE_STOP;
++    g_charge_mppt_probe_request = 1U;
++    window(2000U);
++    g_charge_mppt_probe_request = 2U; /* Busy request cannot extend the run. */
++    window(2000U);
++    window(2000U);
++    window(2000U);
++    assert(SVC_CHARGE_MPPT_PROBE_DONE == g_charge_mppt_probe.status);
++    assert(0U == g_charge_mppt_probe_request);
++
++    /* Abort at every phase on CC pause, reset, and unexpected actual D.
++     * Never force a stale return-to-A proposal after another owner takes D. */
++    for(i = 0U; i < 4U; i++)
++    {
++        unsigned int j;
++        start_test(832U, 14000U, 2000U);
++        g_charge_mppt_probe_request = 1U;
++        assert(PLATFORM_ERR_OK == svc_charge_mppt_update(
++            &g_test_value, g_test_duty, &result));
++        for(j = 0U; j < i * 50U; j++)
++        {
++            assert(PLATFORM_ERR_OK == svc_charge_mppt_update(
++                &g_test_value, g_test_duty, &result));
++            g_test_duty = result.duty_permille;
++        }
++        svc_charge_mppt_pause(g_test_duty);
++        assert(SVC_CHARGE_MPPT_PROBE_ABORTED == g_charge_mppt_probe.status);
++        assert(0U == g_charge_mppt_probe_phase);
++        g_charge_mppt_probe_request = 1U;
++        svc_charge_mppt_reset();
++        assert(0U == g_charge_mppt_probe_request);
++    }
++    start_test(832U, 14000U, 2000U);
++    g_charge_mppt_probe_request = 1U;
++    window(2000U);
++    g_test_duty = 810U;
++    assert(PLATFORM_ERR_OK == svc_charge_mppt_update(
++        &g_test_value, g_test_duty, &result));
++    assert(SVC_CHARGE_MPPT_PROBE_ABORTED == g_charge_mppt_probe.status);
++    assert(810U == result.duty_permille);
++    assert(0U == result.duty_changed);
++
++    /* Invalid direction and out-of-range one-step requests are rejected. */
++    for(i = 1U; i <= 3U; i++)
++    {
++        start_test(1U == i ? 150U : 950U, 14000U, 2000U);
++        g_charge_mppt_probe_request = (uint8_t)i;
++        assert(PLATFORM_ERR_OK == svc_charge_mppt_update(
++            &g_test_value, g_test_duty, &result));
++        assert(SVC_CHARGE_MPPT_PROBE_REJECTED == g_charge_mppt_probe.status);
++        assert(0U == result.duty_changed);
++    }
++
++    /* Interpolation cannot overflow even at UINT32_MAX averaged power. */
++    start_test(832U, UINT32_MAX, 1U);
++    g_test_value.input_voltage_mv = UINT32_MAX;
++    g_charge_mppt_probe_request = 1U;
++    window(1U);
++    window(1U);
++    window(1U);
++    window(1U);
++    assert(UINT32_MAX == g_charge_mppt_probe.reference_early_uw);
++    assert(UINT32_MAX == g_charge_mppt_probe.b_late.input_voltage_mv);
++    assert(0 == g_charge_mppt_probe.delta_late_uw);
++    puts("PASS: one-step probe, transient/drift, aborts, frozen ring, overflow");
++#endif
++
++    /* Freeze preserves history while the tracker continues running. */
++    start_test(800U, 14000U, 2000U);
++    window(2000U);
++    window(2000U);
++    saved_index = g_charge_mppt_trace_write_index;
++    saved_sequence = g_charge_mppt_trace_sequence;
++    svc_charge_mppt_trace_freeze(SVC_CHARGE_MPPT_TRACE_STOP);
++    window(1600U);
++    assert(saved_index == g_charge_mppt_trace_write_index);
++    assert(saved_sequence == g_charge_mppt_trace_sequence);
++    svc_charge_mppt_reset();
++    assert(saved_sequence == g_charge_mppt_trace_sequence);
++    svc_charge_mppt_trace_clear();
++    assert(0U == g_charge_mppt_trace_count);
++
++    /* Long plateau crosses both physical bounds and wraps the trace. */
++    start_test(949U, 14000U, 2000U);
++    window(2000U);
++    assert(950U == g_test_duty);
++    window(2000U);
++    assert((950U - SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE) == g_test_duty);
++    for(i = 0U; i < 2000U; i++)
++    {
++        window(2000U);
++#if MPPT_TREND_TEST
++        assert(g_charge_mppt_trend_compare_count < 8U);
++        assert(0U == g_charge_mppt_trend_reversed);
++#endif
++    }
++    assert(32U == g_charge_mppt_trace_count);
++    assert(g_charge_mppt_trace_write_index < 32U);
++    /* Every valid starting D and both directions, including odd parity near
++     * limits: upward and downward steps use independent expected sizes. */
++    for(i = 150U; i <= 950U; i++)
++    {
++        unsigned int direction;
++        for(direction = 0U; direction < 2U; direction++)
++        {
++            unsigned int expected;
++            start_test((uint16_t)i, 14000U, 2000U);
++            g_charge_mppt_direction_increase = (uint8_t)direction;
++            if(150U == i)
++            {
++                expected = i + SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE;
++            }
++            else if(950U == i)
++            {
++                expected = i - SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE;
++            }
++            else if(0U != direction)
++            {
++                expected = i + SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE;
++                if(expected > 950U) { expected = 950U; }
++            }
++            else
++            {
++                expected = i - SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE;
++                if(expected < 150U) { expected = 150U; }
++            }
++            window(2000U);
++            assert(expected == g_test_duty);
++        }
++    }
++    printf("PASS: every valid D, tracking step=+%u/-%u permille\n",
++        SVC_CHARGE_MPPT_DUTY_UP_STEP_PERMILLE,
++        SVC_CHARGE_MPPT_DUTY_DOWN_STEP_PERMILLE);
++    assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(
++        NULL, 800U, &result));
++    assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(
++        &g_test_value, 149U, &result));
++    assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(
++        &g_test_value, 951U, &result));
++    puts("PASS: direction, timing, trend lifecycle, trace, bounds, parameters");
++    return 0;
++}
++'@
++
++Push-Location $repoRoot
++try {
++    foreach ($variant in @('baseline', 'working')) {
++        if ($variant -eq 'baseline') {
++            $module = (& git show '836b930af275a6a42c77202b11797d24ac7a6364:02_Service/svc_charge_mppt.c') -join "`n"
++            if ($LASTEXITCODE -ne 0) { throw 'Cannot read baseline source' }
++            $enabled = 0
++        } else {
++            $module = Get-Content -Raw -LiteralPath '02_Service/svc_charge_mppt.c'
++            $enabled = 1
++        }
++        $executable = Join-Path $testDirectory "$variant.exe"
++        ($module + "`n" + $harness) | & $Gcc -x c -std=c99 -Wall -Wextra -Werror `
++            "-DMPPT_TREND_TEST=$enabled" -I02_Service -I03_Platform/bsp `
++            -I03_Platform/comm -I03_Platform/mcu_interface -o $executable -
++        if ($LASTEXITCODE -ne 0) { throw "$variant compile failed" }
++        Write-Output "--- $variant ---"
++        & $executable
++        if ($LASTEXITCODE -ne 0) { throw "$variant assertions failed" }
++    }
++    Write-Output "Host executables retained at $testDirectory"
++} finally {
++    Pop-Location
++}
+
+diff --git a/.agents/scripts/test-mppt-recapture.ps1 b/.agents/scripts/test-mppt-recapture.ps1
+new file mode 100644
+--- /dev/null
++++ b/.agents/scripts/test-mppt-recapture.ps1
+@@ -0,0 +1,235 @@
++param([string]$Gcc = 'D:\software_config\mingw64\mingw64\bin\gcc.exe')
++
++$ErrorActionPreference = 'Stop'
++if (-not (Test-Path -LiteralPath $Gcc)) { throw "Compiler unavailable: $Gcc" }
++$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
++$testDirectory = Join-Path ([IO.Path]::GetTempPath()) ('mppt-recapture-' + [guid]::NewGuid())
++New-Item -ItemType Directory -Path $testDirectory | Out-Null
++$source = @'
++#include <assert.h>
++#include <stdio.h>
++#include "svc_charge.c"
++
++static uint8_t g_test_pwm_on;
++static uint8_t g_test_ready = 1U;
++static uint32_t g_test_sequence;
++static uint32_t g_test_start_count;
++static uint32_t g_test_stop_count;
++static uint32_t g_test_set_count;
++static uint32_t g_test_off_vin = 18000U;
++static uint32_t g_test_on_vin = 16900U;
++static uint32_t g_test_battery = 13700U;
++static int16_t g_test_temperature = 250;
++static platform_err_t g_test_stop_status = PLATFORM_ERR_OK;
++static platform_err_t g_test_start_status = PLATFORM_ERR_OK;
++static uint16_t g_test_initial_duty;
++
++platform_err_t svc_measure_get(svc_measure_value_t *p_value)
++{
++    assert(NULL != p_value);
++    memset(p_value, 0, sizeof(*p_value));
++    p_value->input_voltage_mv = g_test_pwm_on ? g_test_on_vin : g_test_off_vin;
++    p_value->battery_voltage_mv = g_test_battery;
++    p_value->input_current_ma = g_test_pwm_on ? 2700U : 0U;
++    p_value->output_current_ma = 10U;
++    p_value->battery_current_ma = (int32_t)p_value->input_current_ma - 10;
++    p_value->temperature_deci_c = g_test_temperature;
++    return PLATFORM_ERR_OK;
++}
++uint32_t svc_measure_get_sequence(void) { return g_test_sequence; }
++uint8_t svc_measure_is_ready(void) { return g_test_ready; }
++
++platform_err_t bsp_power_path_charge_stop(void)
++{
++    g_test_stop_count++;
++    if(PLATFORM_ERR_OK == g_test_stop_status) { g_test_pwm_on = 0U; }
++    return g_test_stop_status;
++}
++platform_err_t bsp_power_path_charge_start(uint16_t duty)
++{
++    g_test_start_count++;
++    g_test_initial_duty = duty;
++    if(PLATFORM_ERR_OK == g_test_start_status) { g_test_pwm_on = 1U; }
++    return g_test_start_status;
++}
++platform_err_t bsp_power_path_charge_set_duty(uint16_t duty)
++{
++    assert(g_test_pwm_on);
++    assert(duty >= 150U && duty <= 950U);
++    g_test_set_count++;
++    return PLATFORM_ERR_OK;
++}
++
++static void tick(void)
++{
++    g_test_sequence += 10U;
++    svc_charge_process();
++}
++static void begin_test(void)
++{
++    unsigned int i;
++    g_test_stop_status = PLATFORM_ERR_OK;
++    g_test_start_status = PLATFORM_ERR_OK;
++    g_test_temperature = 250;
++    g_test_battery = 13700U;
++    g_test_off_vin = 18000U;
++    g_test_on_vin = 16900U;
++    g_test_ready = 1U;
++    assert(PLATFORM_ERR_OK == svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V));
++    assert(PLATFORM_ERR_OK == svc_charge_start());
++    for(i = 0U; i < 4U; i++) { tick(); }
++    assert(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_state);
++    assert(0U == g_charge_current_limited);
++    g_charge_duty_permille = 828U;
++    g_test_start_count = 0U;
++    g_test_stop_count = 0U;
++    g_test_set_count = 0U;
++}
++
++int main(void)
++{
++    unsigned int i;
++    uint32_t starts;
++    uint32_t stops;
++    svc_charge_state_t states[] = {
++        SVC_CHARGE_STATE_OFF, SVC_CHARGE_STATE_WAIT_SAMPLE,
++        SVC_CHARGE_STATE_START_SETTLE, SVC_CHARGE_STATE_WAKE_CV,
++        SVC_CHARGE_STATE_CONSTANT_VOLTAGE, SVC_CHARGE_STATE_FAULT,
++        SVC_CHARGE_STATE_FULL_WAIT, SVC_CHARGE_STATE_MAINTENANCE
++    };
++
++    begin_test();
++    g_charge_mppt_recapture_request = 1U;
++    tick();
++    assert(SVC_CHARGE_STATE_MPPT_RECAPTURE_WAIT == g_charge_state);
++    assert(0U == g_charge_mppt_recapture_request);
++    assert(0U == g_test_pwm_on);
++    assert(0U == g_charge_duty_permille);
++    assert(828U == g_charge_mppt_recapture.duty_before_permille);
++    assert(16900U == g_charge_mppt_recapture.input_voltage_before_mv);
++    assert(1U == g_test_stop_count);
++    for(i = 0U; i < 49U; i++)
++    {
++        tick();
++        assert(0U == g_test_start_count);
++        assert(0U == g_test_set_count);
++        assert(0U == g_test_pwm_on);
++    }
++    g_charge_mppt_recapture_request = 1U; /* Busy must not extend the wait. */
++    tick();
++    assert(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state);
++    assert(0U == g_test_start_count);
++    tick();
++    assert(1U == g_test_start_count);
++    assert(761U == g_test_initial_duty);
++    assert(761U == g_charge_mppt_recapture.initial_duty_permille);
++    assert(18000U == g_charge_mppt_recapture.input_voltage_restart_mv);
++    assert(0U == g_charge_mppt_recapture.input_current_restart_ma);
++    tick();
++    tick();
++    assert(SVC_CHARGE_MPPT_RECAPTURE_DONE == g_charge_mppt_recapture.status);
++    assert(811U == g_charge_mppt_recapture.settled_duty_permille);
++    assert(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_mppt_recapture.state_after);
++    starts = g_test_start_count;
++    stops = g_test_stop_count;
++    for(i = 0U; i < 100U; i++) { tick(); }
++    assert(starts == g_test_start_count);
++    assert(stops == g_test_stop_count);
++    puts("PASS: confirmed PWM off, fresh 500 ms wait, recomputed D, no repeat");
++
++    /* Admission guard tested without running unrelated state handlers. */
++    for(i = 0U; i < sizeof(states) / sizeof(states[0U]); i++)
++    {
++        begin_test();
++        g_charge_state = states[i];
++        g_charge_mppt_recapture_request = 1U;
++        request_mppt_recapture();
++        assert(SVC_CHARGE_MPPT_RECAPTURE_REJECTED == g_charge_mppt_recapture.status);
++        assert(0U == g_test_stop_count);
++        assert(states[i] == g_charge_state);
++    }
++    begin_test();
++    g_charge_current_limited = 1U;
++    g_charge_mppt_recapture_request = 1U;
++    request_mppt_recapture();
++    assert(SVC_CHARGE_MPPT_RECAPTURE_REJECTED == g_charge_mppt_recapture.status);
++    assert(0U == g_test_stop_count);
++    begin_test();
++    g_charge_mppt_probe.status = SVC_CHARGE_MPPT_PROBE_RUNNING;
++    g_charge_mppt_recapture_request = 1U;
++    request_mppt_recapture();
++    assert(SVC_CHARGE_MPPT_RECAPTURE_REJECTED == g_charge_mppt_recapture.status);
++    g_charge_mppt_probe.status = SVC_CHARGE_MPPT_PROBE_IDLE;
++
++    begin_test();
++    g_test_stop_status = PLATFORM_ERR_HW;
++    g_charge_mppt_recapture_request = 1U;
++    tick();
++    for(i = 0U; i < 60U; i++) { tick(); }
++    assert(0U == g_test_start_count);
++    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
++    assert(SVC_CHARGE_MPPT_RECAPTURE_FAILED == g_charge_mppt_recapture.status);
++    assert(g_test_stop_count > 1U); /* Existing fault path retries stop. */
++
++    begin_test();
++    g_charge_mppt_recapture_request = 1U;
++    tick();
++    svc_charge_process(); /* Same sequence: one missed fresh measurement. */
++    svc_charge_process(); /* Original 20 ms sample timeout. */
++    assert(SVC_CHARGE_MPPT_RECAPTURE_FAILED == g_charge_mppt_recapture.status);
++    assert(SVC_CHARGE_FAULT_SAMPLE_TIMEOUT == g_charge_fault);
++    assert(0U == g_test_start_count);
++
++    begin_test();
++    g_charge_mppt_recapture_request = 1U;
++    tick();
++    g_test_start_status = PLATFORM_ERR_HW;
++    for(i = 0U; i < 54U; i++) { tick(); }
++    assert(SVC_CHARGE_MPPT_RECAPTURE_FAILED == g_charge_mppt_recapture.status);
++    assert(0U == g_test_pwm_on);
++
++    begin_test();
++    g_charge_mppt_recapture_request = 1U;
++    tick();
++    assert(PLATFORM_ERR_OK == svc_charge_stop());
++    for(i = 0U; i < 100U; i++) { tick(); }
++    assert(SVC_CHARGE_STATE_OFF == g_charge_state);
++    assert(SVC_CHARGE_MPPT_RECAPTURE_ABORTED == g_charge_mppt_recapture.status);
++    assert(0U == g_test_start_count);
++
++    begin_test();
++    g_charge_mppt_recapture_request = 1U;
++    tick();
++    g_test_ready = 0U;
++    for(i = 0U; i < 500U; i++) { tick(); }
++    assert(SVC_CHARGE_MPPT_RECAPTURE_FAILED == g_charge_mppt_recapture.status);
++    assert(0U == g_test_start_count);
++
++    begin_test();
++    g_charge_mppt_recapture_request = 1U;
++    tick();
++    g_test_off_vin = 13000U;
++    tick();
++    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
++    assert(SVC_CHARGE_MPPT_RECAPTURE_FAILED == g_charge_mppt_recapture.status);
++    assert(0U == g_test_start_count);
++    puts("PASS: admission, busy, stop/start failure, timeout, cancel, input fault");
++    return 0;
++}
++'@
++
++Push-Location $repoRoot
++try {
++    $executable = Join-Path $testDirectory 'recapture.exe'
++    $source | & $Gcc -x c -std=c99 -Wall -Wextra -Werror `
++        -I02_Service -I03_Platform/bsp -I03_Platform/comm -I03_Platform/mcu_interface `
++        -o $executable - 02_Service/svc_charge_config.c 02_Service/svc_charge_control.c `
++        02_Service/svc_charge_maintenance.c 02_Service/svc_charge_protection.c `
++        02_Service/svc_charge_mppt.c
++    if ($LASTEXITCODE -ne 0) { throw 'Recapture host compile failed' }
++    & $executable
++    if ($LASTEXITCODE -ne 0) { throw 'Recapture assertions failed' }
++    Write-Output "Host executable retained at $testDirectory"
++} finally {
++    Pop-Location
++}

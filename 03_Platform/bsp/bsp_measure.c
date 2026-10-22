@@ -12,7 +12,6 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "plat_adc.h"
-#include "plat_gpio.h"
 #include "bsp_measure.h"
 #include "board_measure_config.h"
 #include "board_resources.h"
@@ -521,10 +520,6 @@ void bsp_measure_process(void)
     }
     g_measure_status = PLATFORM_ERR_OK;
     g_last_error     = BSP_MEASURE_ERROR_NONE;
-    /* PB5 changes state for each newly calculated filtered result. The time
-     * between adjacent edges is the measurement publication interval. A
-     * diagnostic GPIO failure must not invalidate an otherwise valid frame. */
-    plat_gpio_toggle(BOARD_GPIO_LED3);
     if(NULL != pf_measure_data)
     {
         result.input_voltage_mv   = value.input_voltage_mv;

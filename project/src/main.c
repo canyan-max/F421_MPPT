@@ -39,6 +39,9 @@
 /* add user code begin private includes */
 #include "svc_measure.h"
 #include "svc_charge.h"
+#include "svc_discharge.h"
+#include "svc_led.h"
+#include "bsp_power_path.h"
 /* add user code end private includes */
 
 /* private typedef -----------------------------------------------------------*/
@@ -61,12 +64,17 @@ static volatile platform_err_t g_measure_init_status;
 static volatile platform_err_t g_charge_init_status;
 static volatile platform_err_t g_charge_start_status = PLATFORM_ERR_BUSY;
 static uint32_t                g_charge_task_last_ms;
+static volatile platform_err_t g_discharge_init_status;
+static volatile platform_err_t g_discharge_bind_status;
+static uint32_t                g_discharge_task_last_ms;
+static volatile platform_err_t g_led_status;
 
 /* add user code end private variables */
 
 /* private function prototypes --------------------------------------------*/
 /* add user code begin function prototypes */
 static void app_charge_task_process(void);
+static void app_discharge_task_process(void);
 /* add user code end function prototypes */
 
 /* private user code ---------------------------------------------------------*/
@@ -83,6 +91,21 @@ static void app_charge_task_process(void)
     /* Skip missed slots instead of running several control updates at once. */
     g_charge_task_last_ms = now_ms;
     svc_charge_process();
+}
+
+static void app_discharge_task_process(void)
+{
+    uint32_t now_ms = wk_timebase_get();
+
+    if((uint32_t)(now_ms - g_discharge_task_last_ms) <
+       SVC_DISCHARGE_PROCESS_PERIOD_MS)
+    {
+        return;
+    }
+    g_discharge_task_last_ms = now_ms;
+    svc_discharge_process();
+    /* LED errors are retained for Watch and retried, not a power interlock. */
+    g_led_status = svc_led_process();
 }
 /* add user code end 0 */
 
@@ -139,6 +162,9 @@ int main(void)
   /* init tmr1 function. */
   wk_tmr1_init();
   /* add user code begin power_default_off */
+    g_led_status = svc_led_init();
+    /* Bind the synchronous fault callback before wk_exint_config arms PB0. */
+    g_discharge_bind_status = bsp_power_path_discharge_init();
     g_charge_init_status =
         svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V);
   /* add user code end power_default_off */
@@ -159,12 +185,16 @@ int main(void)
   wk_exint_config();
 
   /* add user code begin 2 */
+  /* Load protection reads PB0 only after its generated EXINT setup. */
+  g_discharge_init_status =
+      svc_discharge_init(SVC_DISCHARGE_BATTERY_SYSTEM_12V);
   if(PLATFORM_ERR_OK == g_measure_init_status &&
      PLATFORM_ERR_OK == g_charge_init_status)
   {
       g_charge_start_status = svc_charge_start();
   }
   g_charge_task_last_ms = wk_timebase_get();
+  g_discharge_task_last_ms = wk_timebase_get();
   /* add user code end 2 */
 
   while(1)
@@ -172,6 +202,7 @@ int main(void)
       /* add user code begin 3 */
       svc_measure_process();
       app_charge_task_process();
+      app_discharge_task_process();
       /* add user code end 3 */
   }
 }

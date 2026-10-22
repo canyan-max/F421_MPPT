@@ -26,6 +26,9 @@ extern "C" {
 
 /* functions ----------------------------------------------------------------*/
 uint32_t plat_tick_get_ms(void);
+/* Short bounded critical sections only; restore the exact saved mask. */
+uint32_t plat_irq_save(void);
+void     plat_irq_restore(uint32_t mask);
 void     plat_delay_ms(uint32_t ms);
 void     plat_dcache_invalidate(void *p_addr, int32_t size);
 

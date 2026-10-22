@@ -31,6 +31,7 @@
 /* add user code begin private includes */
 #include "plat_adc.h"
 #include "board_resources.h"
+#include "plat_gpio.h"
 /* add user code end private includes */
 
 /* private typedef -----------------------------------------------------------*/
@@ -231,7 +232,7 @@ void SysTick_Handler(void)
 void EXINT1_0_IRQHandler(void)
 {
   /* add user code begin EXINT1_0_IRQ 0 */
-
+    plat_gpio_irq_handler(BOARD_GPIO_LOAD_FAULT);
   /* add user code end EXINT1_0_IRQ 0 */
 
   if(exint_interrupt_flag_get(EXINT_LINE_0) != RESET)

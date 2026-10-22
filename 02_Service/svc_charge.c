@@ -8,7 +8,6 @@
  */
 
 /* includes -----------------------------------------------------------------*/
-#include <string.h>
 #include "svc_charge.h"
 #include "svc_charge_control.h"
 #include "svc_charge_maintenance.h"
@@ -17,55 +16,8 @@
 #include "bsp_power_path.h"
 /* define   -----------------------------------------------------------------*/
 #define SVC_CHARGE_CC_RELEASE_MARGIN_MA (100U)
-#define SVC_CHARGE_TRACE_NEAR_DUTY_PERMILLE (930U)
 
 /* typedef ------------------------------------------------------------------*/
-typedef enum SVC_CHARGE_TRACE_SLOT_T
-{
-    SVC_CHARGE_TRACE_NEAR = 0U,
-    SVC_CHARGE_TRACE_TOP,
-    SVC_CHARGE_TRACE_AFTER_500MS,
-    SVC_CHARGE_TRACE_AFTER_2S,
-    SVC_CHARGE_TRACE_AFTER_10S,
-    SVC_CHARGE_TRACE_MIN_VIN,
-    SVC_CHARGE_TRACE_STATE_CHANGE,
-    SVC_CHARGE_TRACE_LEAVE_HIGH,
-    SVC_CHARGE_TRACE_FAULT,
-    SVC_CHARGE_TRACE_LATEST,
-    SVC_CHARGE_TRACE_NUM,
-} svc_charge_trace_slot_t;
-
-typedef enum SVC_CHARGE_TRACE_SOURCE_T
-{
-    SVC_CHARGE_TRACE_SOURCE_NONE = 0U,
-    SVC_CHARGE_TRACE_SOURCE_MPPT,
-    SVC_CHARGE_TRACE_SOURCE_CC,
-    SVC_CHARGE_TRACE_SOURCE_CV,
-    SVC_CHARGE_TRACE_SOURCE_MAINTENANCE,
-} svc_charge_trace_source_t;
-
-typedef struct SVC_CHARGE_TRACE_SNAPSHOT_T
-{
-    uint32_t service_tick; /* Relative 10 ms ticks; not ADC frames. */
-    uint32_t measure_sequence;
-    uint32_t mppt_compare_before;
-    uint32_t mppt_compare_after;
-    svc_measure_value_t       measure;
-    uint16_t                  duty_before;
-    uint16_t                  duty_after;
-    uint16_t                  cv_duty_ceiling_permille;
-    svc_charge_state_t        state_before;
-    svc_charge_state_t        state_after;
-    uint8_t                   cc_before;
-    uint8_t                   cc_after;
-    svc_charge_trace_source_t control_source;
-    svc_charge_fault_t        fault;
-    uint8_t                   duty_high_limited;
-    uint8_t                   cv_duty_ceiling_limited;
-    uint8_t                   measurement_valid;
-    uint8_t                   valid;
-} svc_charge_trace_snapshot_t;
-
 /* variables ----------------------------------------------------------------*/
 svc_charge_state_t  g_charge_state = SVC_CHARGE_STATE_OFF;
 svc_charge_fault_t  g_charge_fault;
@@ -91,147 +43,7 @@ uint8_t g_charge_current_limited;
 uint16_t g_charge_cv_duty_ceiling_permille;
 uint8_t  g_charge_cv_duty_ceiling_active;
 uint8_t  g_charge_cv_duty_ceiling_limited;
-/* Fixed slots latch once except MIN_VIN and LATEST. Watch-only diagnostics. */
-volatile svc_charge_trace_snapshot_t g_charge_trace[SVC_CHARGE_TRACE_NUM];
-volatile uint8_t                     g_charge_trace_clear_request;
-uint8_t                              g_charge_trace_armed;
-static uint32_t                      g_charge_trace_service_tick;
-static uint32_t                      g_charge_trace_top_tick;
-static svc_measure_value_t           g_charge_trace_measure;
-static uint32_t                      g_charge_trace_measure_sequence;
-static uint8_t                       g_charge_trace_measure_valid;
-static svc_charge_trace_source_t     g_charge_trace_source;
-
 /* private  functions  ------------------------------------------------------*/
-static void reset_trace(void)
-{
-    uint32_t                    index;
-    svc_charge_trace_snapshot_t empty_snapshot;
-
-    memset(&empty_snapshot, 0, sizeof(empty_snapshot));
-    for(index = 0U; index < sizeof(g_charge_trace) / sizeof(g_charge_trace[0U]);
-        index++)
-    {
-        g_charge_trace[index] = empty_snapshot;
-    }
-    g_charge_trace_armed         = 0U;
-    g_charge_trace_service_tick  = 0U;
-    g_charge_trace_top_tick      = 0U;
-    g_charge_trace_clear_request = 0U;
-    svc_charge_mppt_trace_clear();
-}
-
-static void save_trace(svc_charge_trace_slot_t            slot,
-                       const svc_charge_trace_snapshot_t *p_snapshot)
-{
-    if(NULL == p_snapshot || SVC_CHARGE_TRACE_NUM <= slot)
-    {
-        return;
-    }
-    g_charge_trace[slot].valid = 0U;
-    g_charge_trace[slot]       = *p_snapshot;
-    /* Publish last. Inspect fixed slots only after valid becomes one. */
-    g_charge_trace[slot].valid = 1U;
-}
-
-static void update_trace(svc_charge_trace_snapshot_t *p_snapshot)
-{
-    uint32_t              elapsed_ticks;
-    uint32_t              index;
-    static const uint32_t g_trace_delays_ms[] = {500U, 2000U, 10000U};
-
-    if(NULL == p_snapshot)
-    {
-        return;
-    }
-    p_snapshot->duty_after               = g_charge_duty_permille;
-    p_snapshot->state_after              = g_charge_state;
-    p_snapshot->cc_after                 = g_charge_current_limited;
-    p_snapshot->control_source           = g_charge_trace_source;
-    p_snapshot->fault                    = g_charge_fault;
-    p_snapshot->duty_high_limited        = g_charge_duty_high_limited;
-    p_snapshot->cv_duty_ceiling_permille = g_charge_cv_duty_ceiling_permille;
-    p_snapshot->cv_duty_ceiling_limited  = g_charge_cv_duty_ceiling_limited;
-    p_snapshot->mppt_compare_after       = svc_charge_mppt_get_compare_count();
-    p_snapshot->measurement_valid        = g_charge_trace_measure_valid;
-    p_snapshot->measure_sequence         = g_charge_trace_measure_sequence;
-    if(0U != g_charge_trace_measure_valid)
-    {
-        p_snapshot->measure = g_charge_trace_measure;
-    }
-    /* Fault evidence must survive even if the near-duty trigger never fired. */
-    if(0U == g_charge_trace[SVC_CHARGE_TRACE_FAULT].valid &&
-       SVC_CHARGE_STATE_FAULT == g_charge_state)
-    {
-        save_trace(SVC_CHARGE_TRACE_FAULT, p_snapshot);
-    }
-    /* Normal CV can now stay below 930; retain its entry without a high-D
-     * trigger so the trial ceiling is still observable in a fixed snapshot. */
-    if(0U == g_charge_trace[SVC_CHARGE_TRACE_STATE_CHANGE].valid &&
-       p_snapshot->state_before != p_snapshot->state_after &&
-       (0U != g_charge_trace_armed ||
-        SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state))
-    {
-        save_trace(SVC_CHARGE_TRACE_STATE_CHANGE, p_snapshot);
-    }
-    if(0U == g_charge_trace_armed)
-    {
-        if(SVC_CHARGE_TRACE_NEAR_DUTY_PERMILLE > p_snapshot->duty_before &&
-           SVC_CHARGE_TRACE_NEAR_DUTY_PERMILLE > p_snapshot->duty_after)
-        {
-            return;
-        }
-        g_charge_trace_armed = 1U;
-        save_trace(SVC_CHARGE_TRACE_NEAR, p_snapshot);
-    }
-    if(0U == g_charge_trace[SVC_CHARGE_TRACE_TOP].valid &&
-       (BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE == p_snapshot->duty_before ||
-        BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE == p_snapshot->duty_after))
-    {
-        g_charge_trace_top_tick = g_charge_trace_service_tick;
-        save_trace(SVC_CHARGE_TRACE_TOP, p_snapshot);
-    }
-    if(0U != g_charge_trace[SVC_CHARGE_TRACE_TOP].valid)
-    {
-        elapsed_ticks = g_charge_trace_service_tick - g_charge_trace_top_tick;
-        for(index = 0U;
-            index < sizeof(g_trace_delays_ms) / sizeof(g_trace_delays_ms[0U]);
-            index++)
-        {
-            svc_charge_trace_slot_t
-                slot = (svc_charge_trace_slot_t)(SVC_CHARGE_TRACE_AFTER_500MS +
-                                                 index);
-            if(0U == g_charge_trace[slot].valid &&
-               elapsed_ticks >=
-                   g_trace_delays_ms[index] / SVC_CHARGE_PROCESS_PERIOD_MS)
-            {
-                save_trace(slot, p_snapshot);
-            }
-        }
-    }
-    if(0U != p_snapshot->measurement_valid &&
-       (0U == g_charge_trace[SVC_CHARGE_TRACE_MIN_VIN].valid ||
-        0U == g_charge_trace[SVC_CHARGE_TRACE_MIN_VIN].measurement_valid ||
-        p_snapshot->measure.input_voltage_mv <
-            g_charge_trace[SVC_CHARGE_TRACE_MIN_VIN].measure.input_voltage_mv))
-    {
-        save_trace(SVC_CHARGE_TRACE_MIN_VIN, p_snapshot);
-    }
-    if(0U == g_charge_trace[SVC_CHARGE_TRACE_LEAVE_HIGH].valid &&
-       SVC_CHARGE_TRACE_NEAR_DUTY_PERMILLE <= p_snapshot->duty_before &&
-       SVC_CHARGE_TRACE_NEAR_DUTY_PERMILLE > p_snapshot->duty_after)
-    {
-        save_trace(SVC_CHARGE_TRACE_LEAVE_HIGH, p_snapshot);
-    }
-    /* Refresh only every 500 ms; earlier event slots remain latched. */
-    if(0U == g_charge_trace[SVC_CHARGE_TRACE_LATEST].valid ||
-       (g_charge_trace_service_tick -
-        g_charge_trace[SVC_CHARGE_TRACE_LATEST].service_tick) >=
-           500U / SVC_CHARGE_PROCESS_PERIOD_MS)
-    {
-        save_trace(SVC_CHARGE_TRACE_LATEST, p_snapshot);
-    }
-}
 static uint32_t delay_ms_to_ticks(uint32_t delay_ms)
 {
     uint32_t ticks = delay_ms / SVC_CHARGE_PROCESS_PERIOD_MS;
@@ -268,7 +80,6 @@ static void enter_constant_voltage(const svc_measure_value_t *p_value)
         return;
     }
     svc_charge_maintenance_reset();
-    svc_charge_mppt_trace_freeze(SVC_CHARGE_MPPT_TRACE_CV);
     reset_mppt_runtime();
     g_charge_cv_duty_ceiling_permille = g_charge_duty_permille;
     g_charge_cv_duty_ceiling_active   = 1U;
@@ -312,15 +123,11 @@ calculate_running_duty(const svc_measure_value_t   *p_value,
     }
     if(0U != g_charge_current_limited)
     {
-        g_charge_trace_source = SVC_CHARGE_TRACE_SOURCE_CC;
         svc_charge_mppt_pause(current_duty_permille);
         return svc_charge_control_calculate_cc(p_value, current_duty_permille,
                                                p_config->current_target_ma,
                                                p_result);
     }
-    g_charge_trace_source = SVC_CHARGE_TRACE_SOURCE_MPPT;
-    svc_charge_mppt_trace_set_context(g_charge_trace_service_tick,
-                                      g_charge_trace_measure_sequence);
     status = svc_charge_mppt_update(p_value, current_duty_permille,
                                     &mppt_result);
     if(PLATFORM_ERR_OK != status)
@@ -392,7 +199,6 @@ static void enter_fault(svc_charge_fault_t fault, platform_err_t status)
 
     capture_fault_snapshot();
     stop_status = bsp_power_path_charge_stop();
-    svc_charge_mppt_trace_freeze(SVC_CHARGE_MPPT_TRACE_FAULT);
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
@@ -432,10 +238,6 @@ static platform_err_t get_new_measurement(svc_measure_value_t *p_value,
         *p_fault = SVC_CHARGE_FAULT_MEASUREMENT;
         return status;
     }
-    /* Reuse the exact measurement passed to this control/protection cycle. */
-    g_charge_trace_measure          = *p_value;
-    g_charge_trace_measure_sequence = svc_measure_get_sequence();
-    g_charge_trace_measure_valid    = 1U;
     fault = (0U != allow_missing_battery)
                 ? svc_charge_protection_check_wake(p_value)
                 : svc_charge_protection_check_immediate(p_value);
@@ -685,7 +487,6 @@ static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
     }
     *p_fault                         = SVC_CHARGE_FAULT_NONE;
     g_charge_cv_duty_ceiling_limited = 0U;
-    g_charge_trace_source            = SVC_CHARGE_TRACE_SOURCE_CV;
     status = svc_charge_control_calculate_cv(p_value, g_charge_duty_permille,
                                              voltage_target_mv,
                                              &control_result);
@@ -893,7 +694,6 @@ static void process_maintenance(void)
     {
         return;
     }
-    g_charge_trace_source = SVC_CHARGE_TRACE_SOURCE_MAINTENANCE;
     status = svc_charge_maintenance_calculate_cv(&value, g_charge_duty_permille,
                                                  &control_result, &fault);
     if(PLATFORM_ERR_OK != status)
@@ -1007,8 +807,6 @@ platform_err_t svc_charge_init(svc_charge_battery_system_t system)
 {
     platform_err_t config_status = svc_charge_config_init(system);
     platform_err_t stop_status;
-
-    reset_trace();
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
@@ -1066,21 +864,6 @@ platform_err_t svc_charge_start(void)
 
 void svc_charge_process(void)
 {
-    svc_charge_trace_snapshot_t snapshot;
-
-    if(0U != g_charge_trace_clear_request)
-    {
-        reset_trace();
-    }
-    g_charge_trace_service_tick++;
-    g_charge_trace_measure_valid = 0U;
-    g_charge_trace_source        = SVC_CHARGE_TRACE_SOURCE_NONE;
-    memset(&snapshot, 0, sizeof(snapshot));
-    snapshot.service_tick        = g_charge_trace_service_tick;
-    snapshot.duty_before         = g_charge_duty_permille;
-    snapshot.state_before        = g_charge_state;
-    snapshot.cc_before           = g_charge_current_limited;
-    snapshot.mppt_compare_before = svc_charge_mppt_get_compare_count();
     if(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state)
     {
         process_wait_sample();
@@ -1113,12 +896,10 @@ void svc_charge_process(void)
     {
         process_fault_recovery();
     }
-    update_trace(&snapshot);
 }
 
 platform_err_t svc_charge_stop(void)
 {
-    svc_charge_mppt_trace_freeze(SVC_CHARGE_MPPT_TRACE_STOP);
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();

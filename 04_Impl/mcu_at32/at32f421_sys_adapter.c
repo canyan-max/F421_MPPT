@@ -20,6 +20,18 @@
 /* private  functions  ------------------------------------------------------*/
 
 /* exported functions -------------------------------------------------------*/
+uint32_t plat_irq_save(void)
+{
+    uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    return mask;
+}
+
+void plat_irq_restore(uint32_t mask)
+{
+    __set_PRIMASK(mask);
+}
+
 uint32_t plat_tick_get_ms(void)
 {
     return (uint32_t)(wk_timebase_get());
