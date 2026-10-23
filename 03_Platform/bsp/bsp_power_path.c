@@ -14,6 +14,7 @@
 #include "plat_sys.h"
 #include "board_resources.h"
 /* define   -----------------------------------------------------------------*/
+#define BSP_DISCHARGE_SHORT_TEST_BYPASS (1U) /* Temporary PB0 fault isolation. */
 
 /* typedef ------------------------------------------------------------------*/
 
@@ -26,17 +27,25 @@ static uint8_t                 g_discharge_interlock_ready;
 /* private  functions  ------------------------------------------------------*/
 static uint8_t discharge_short_active(void)
 {
+#if BSP_DISCHARGE_SHORT_TEST_BYPASS
+    return 0U;
+#else
     plat_gpio_state_t state;
     platform_err_t    status = plat_gpio_read(BOARD_GPIO_LOAD_FAULT, &state);
     return PLATFORM_ERR_OK != status || PLAT_GPIO_RESET == state;
+#endif
 }
 
 static uint8_t discharge_short_pending(void)
 {
+#if BSP_DISCHARGE_SHORT_TEST_BYPASS
+    return 0U;
+#else
     uint8_t        pending;
     platform_err_t status = plat_gpio_irq_get_pending(BOARD_GPIO_LOAD_FAULT,
                                                       &pending);
     return PLATFORM_ERR_OK != status || 0U != pending;
+#endif
 }
 
 static void latch_discharge_short(void)
@@ -50,7 +59,7 @@ static void latch_discharge_short(void)
 
 static void discharge_short_callback(plat_gpio_id_t id)
 {
-    if(BOARD_GPIO_LOAD_FAULT == id)
+    if(0U == BSP_DISCHARGE_SHORT_TEST_BYPASS && BOARD_GPIO_LOAD_FAULT == id)
     {
         latch_discharge_short();
     }

@@ -34,8 +34,9 @@ typedef enum SVC_CHARGE_STATE_T
     SVC_CHARGE_STATE_CONSTANT_CURRENT = 4U,
     SVC_CHARGE_STATE_CONSTANT_VOLTAGE = 5U,
     SVC_CHARGE_STATE_FAULT            = 6U,
-    SVC_CHARGE_STATE_FULL_WAIT        = 7U,
-    SVC_CHARGE_STATE_MAINTENANCE      = 8U,
+    /* Value 7 is reserved; full waiting is now internal to maintenance. */
+    SVC_CHARGE_STATE_MAINTENANCE = 8U,
+    SVC_CHARGE_STATE_MPPT        = 9U,
 } svc_charge_state_t;
 
 /* variables ----------------------------------------------------------------*/

@@ -30,6 +30,7 @@ static uint8_t is_charging(void)
     switch(svc_charge_get_state())
     {
         case SVC_CHARGE_STATE_WAKE_CV:
+        case SVC_CHARGE_STATE_MPPT:
         case SVC_CHARGE_STATE_CONSTANT_CURRENT:
         case SVC_CHARGE_STATE_CONSTANT_VOLTAGE:
         case SVC_CHARGE_STATE_MAINTENANCE:

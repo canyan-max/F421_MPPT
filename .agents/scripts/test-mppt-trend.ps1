@@ -92,6 +92,122 @@ int main(void)
     assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(NULL, 800U, &result));
     assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(&g_test_value, 149U, &result));
     assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(&g_test_value, 951U, &result));
+    /* Coarse startup is opt-in; ordinary tests above retain 1 permille. */
+    start_test(631U, 12500U);
+    assert(SVC_CHARGE_MPPT_PHASE_OFF == svc_charge_mppt_get_phase());
+    svc_charge_mppt_startup_begin();
+    assert(SVC_CHARGE_MPPT_PHASE_STARTUP == svc_charge_mppt_get_phase());
+    for(i = 0U; i < 12U; i++) { window(700U + 200U * i); }
+    assert(691U == g_test_duty); /* 6 s instead of 30 s at fine cadence. */
+    assert(0U != g_charge_mppt_startup_active);
+    window(2800U); /* Last coarse step loses >0.1 W: undo 5 permille. */
+    assert(686U == g_test_duty);
+    assert(0U == g_charge_mppt_startup_active);
+    assert(0U == g_charge_mppt_previous_power_valid);
+    assert(SVC_CHARGE_MPPT_PHASE_TRACKING == svc_charge_mppt_get_phase());
+    window(2900U);
+    assert(687U == g_test_duty); /* Fine search builds a fresh baseline. */
+
+    start_test(631U, 12500U);
+    svc_charge_mppt_startup_begin();
+    for(i = 0U; i < 20U; i++) { window(1000U); }
+    assert(0U == g_charge_mppt_startup_active);
+    assert(727U == g_test_duty); /* 19 coarse trials, then one fine step. */
+    window(1000U);
+    assert(728U == g_test_duty);
+
+    start_test(631U, 12500U);
+    svc_charge_mppt_startup_begin();
+    window(1000U);
+    svc_charge_mppt_pause(g_test_duty);
+    assert(0U == g_charge_mppt_startup_active);
+    assert(SVC_CHARGE_MPPT_PHASE_PAUSED == svc_charge_mppt_get_phase());
+    window(1000U);
+    assert(SVC_CHARGE_MPPT_PHASE_TRACKING == svc_charge_mppt_get_phase());
+    assert(637U == g_test_duty);
+    svc_charge_mppt_startup_begin();
+    window(1000U);
+    g_test_duty++;
+    window(1000U);
+    assert(0U == g_charge_mppt_startup_active);
+    svc_charge_mppt_startup_begin();
+    svc_charge_mppt_reset();
+    assert(0U == g_charge_mppt_startup_active);
+    /* Coarse startup saturates safely at every allowed duty. */
+    for(i = 150U; i <= 950U; i++)
+    {
+        start_test((uint16_t)i, 12500U);
+        svc_charge_mppt_startup_begin();
+        window(1000U);
+        expected = (950U == i) ? 949U : ((i + 5U > 950U) ? 950U : i + 5U);
+        assert(expected == g_test_duty);
+        if(950U == g_test_duty)
+        {
+            window(1100U);
+            assert(949U == g_test_duty);
+            assert(0U == g_charge_mppt_startup_active);
+        }
+    }
+    /* Resume must not reuse either old direction or the old power baseline. */
+    for(direction = 0U; direction < 2U; direction++)
+    {
+        start_test(780U, 14000U);
+        g_charge_mppt_direction_increase = (uint8_t)direction;
+        window(3000U);
+        svc_charge_mppt_pause(g_test_duty);
+        g_test_duty = 800U; /* CC has moved the operating point. */
+        svc_charge_mppt_resume(g_test_duty);
+        assert(SVC_CHARGE_MPPT_PHASE_REACQUIRE == svc_charge_mppt_get_phase());
+        assert(0U == g_charge_mppt_previous_power_valid);
+        window(2000U); /* Fresh baseline, then UP trial independent of old D. */
+        assert(801U == g_test_duty);
+        assert(SVC_CHARGE_MPPT_PHASE_REACQUIRE == svc_charge_mppt_get_phase());
+        window(1990U); /* Reject loss and restore baseline D. */
+        assert(800U == g_test_duty);
+        assert(0U == g_charge_mppt_previous_power_valid);
+        window(2000U); /* Measure restored point before DOWN trial. */
+        assert(799U == g_test_duty);
+        window(2010U); /* Confirm gain at the lower neighbor. */
+        assert(798U == g_test_duty);
+        assert(SVC_CHARGE_MPPT_PHASE_TRACKING == svc_charge_mppt_get_phase());
+        assert(0U == g_charge_mppt_direction_increase);
+    }
+    start_test(800U, 14000U);
+    svc_charge_mppt_resume(g_test_duty);
+    window(2000U);
+    window(2010U); /* UP gains power: enter normal tracking. */
+    assert(802U == g_test_duty);
+    assert(SVC_CHARGE_MPPT_PHASE_TRACKING == svc_charge_mppt_get_phase());
+    start_test(800U, 14000U);
+    svc_charge_mppt_resume(g_test_duty);
+    window(2000U); window(2000U); window(2000U); window(2000U);
+    assert(800U == g_test_duty); /* Both inconclusive: bounded rollback. */
+    assert(SVC_CHARGE_MPPT_PHASE_TRACKING == svc_charge_mppt_get_phase());
+    for(i = 150U; i <= 950U; i++)
+    {
+        start_test((uint16_t)i, 14000U);
+        svc_charge_mppt_resume(g_test_duty);
+        window(2000U);
+        assert(((950U == i) ? 949U : i + 1U) == g_test_duty);
+        window(1990U);
+        assert(i == g_test_duty);
+    }
+    start_test(800U, 14000U);
+    svc_charge_mppt_resume(g_test_duty);
+    window(2000U);
+    svc_charge_mppt_pause(g_test_duty); /* Interrupted trial cannot survive. */
+    assert(SVC_CHARGE_MPPT_PHASE_PAUSED == svc_charge_mppt_get_phase());
+    svc_charge_mppt_resume(810U);
+    g_test_duty = 810U;
+    window(1000U);
+    assert(811U == g_test_duty);
+    assert(14000000U == g_charge_mppt_previous_power_raw);
+    svc_charge_mppt_reset();
+    assert(SVC_CHARGE_MPPT_PHASE_OFF == svc_charge_mppt_get_phase());
+    puts("PASS: fresh resume direction, two-neighbor verification/rollback,");
+    puts("      bounded inconclusive trials, interruption and all duty boundaries");
+    puts("PASS: bounded coarse startup, 5x progress, loss rollback/rebaseline,");
+    puts("      10 s bound, CC pause, external duty cancellation, all boundaries");
     puts("PASS: MPPT directions, cumulative threshold, bounded reference, timing,");
     puts("      pause/rebaseline, all 801 duties both ways, long run, parameters");
     return 0;

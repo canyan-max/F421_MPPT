@@ -40,6 +40,8 @@ svc_charge_maintenance_calculate_cv(const svc_measure_value_t *p_value,
                                     uint16_t current_duty_permille,
                                     svc_charge_control_result_t *p_result,
                                     svc_charge_fault_t          *p_fault);
+/* Request normal charging after sustained net battery discharge, independent
+ * of battery voltage. This is not an input-voltage fault. */
 uint8_t svc_charge_maintenance_update_recharge_request(
     const svc_measure_value_t *p_value);
 

@@ -232,7 +232,7 @@ void SysTick_Handler(void)
 void EXINT1_0_IRQHandler(void)
 {
   /* add user code begin EXINT1_0_IRQ 0 */
-    plat_gpio_irq_handler(BOARD_GPIO_LOAD_FAULT);
+//    plat_gpio_irq_handler(BOARD_GPIO_LOAD_FAULT);
   /* add user code end EXINT1_0_IRQ 0 */
 
   if(exint_interrupt_flag_get(EXINT_LINE_0) != RESET)

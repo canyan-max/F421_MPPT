@@ -43,17 +43,6 @@ uint8_t
 svc_charge_control_is_wake_cv_required(const svc_measure_value_t *p_value);
 uint8_t svc_charge_control_is_input_voltage_sufficient(
     const svc_measure_value_t *p_value, uint8_t allow_missing_battery);
-platform_err_t
-svc_charge_control_calculate_cc(const svc_measure_value_t *p_value,
-                                uint16_t current_duty_permille,
-                                uint32_t current_target_ma,
-                                svc_charge_control_result_t *p_result);
-platform_err_t
-svc_charge_control_calculate_cv(const svc_measure_value_t *p_value,
-                                uint16_t current_duty_permille,
-                                uint32_t voltage_target_mv,
-                                svc_charge_control_result_t *p_result);
-
 #ifdef __cplusplus
 }
 #endif // end of __cplusplus

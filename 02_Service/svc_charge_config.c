@@ -12,7 +12,7 @@
 /* define   -----------------------------------------------------------------*/
 #define SVC_CHARGE_VOLTAGE_12V_TARGET_MV (14400U)
 #define SVC_CHARGE_VOLTAGE_24V_TARGET_MV (29200U)
-#define SVC_CHARGE_MAINTENANCE_12V_TARGET_MV (14000U)
+#define SVC_CHARGE_MAINTENANCE_12V_TARGET_MV (14100U)
 #define SVC_CHARGE_MAINTENANCE_24V_TARGET_MV (28000U)
 #define SVC_CHARGE_MAINTENANCE_12V_RECHARGE_MV (13800U)
 #define SVC_CHARGE_MAINTENANCE_24V_RECHARGE_MV (27600U)
@@ -34,7 +34,7 @@
 #define SVC_CHARGE_RECOVERY_NORMAL_DELAY_MS (5000U)
 #define SVC_CHARGE_RECOVERY_OVERCURRENT_DELAY_MS (20000U)
 #define SVC_CHARGE_COMPLETION_VOLTAGE_MARGIN_MV (200U)
-#define SVC_CHARGE_COMPLETION_CURRENT_MA (200U)
+#define SVC_CHARGE_COMPLETION_CURRENT_MA (500U)
 #define SVC_CHARGE_COMPLETION_DISCHARGE_TOLERANCE_MA (500U)
 #define SVC_CHARGE_COMPLETION_CONFIRM_DELAY_MS (10000U)
 
@@ -86,7 +86,7 @@ static platform_err_t validate_config(const svc_charge_config_t *p_config)
        p_config->maintenance.recharge_voltage_mv >=
            p_config->maintenance.voltage_target_mv ||
        0U == p_config->maintenance.recharge_delay_ms ||
-       p_config->voltage_target_mv <= p_config->maintenance.voltage_target_mv)
+       p_config->voltage_target_mv < p_config->maintenance.voltage_target_mv)
     {
         return PLATFORM_ERR_PARAM;
     }

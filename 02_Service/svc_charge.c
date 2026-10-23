@@ -10,6 +10,8 @@
 /* includes -----------------------------------------------------------------*/
 #include "svc_charge.h"
 #include "svc_charge_control.h"
+#include "svc_charge_cc.h"
+#include "svc_charge_cv.h"
 #include "svc_charge_maintenance.h"
 #include "svc_charge_mppt.h"
 #include "svc_measure.h"
@@ -37,7 +39,7 @@ uint16_t            g_charge_fault_duty_snapshot;
 uint32_t            g_charge_fault_sequence_snapshot;
 uint8_t             g_charge_fault_snapshot_valid;
 uint8_t             g_charge_duty_high_limited;
-/* Within CONSTANT_CURRENT: zero selects MPPT, nonzero selects CC. */
+/* Compatibility Watch flag, derived from the explicit CC/MPPT state. */
 uint8_t g_charge_current_limited;
 /* Trial: normal CV may recover duty only up to its entry operating point. */
 uint16_t g_charge_cv_duty_ceiling_permille;
@@ -81,6 +83,7 @@ static void enter_constant_voltage(const svc_measure_value_t *p_value)
     }
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
+    svc_charge_mppt_pause(g_charge_duty_permille);
     g_charge_cv_duty_ceiling_permille = g_charge_duty_permille;
     g_charge_cv_duty_ceiling_active   = 1U;
     g_charge_voltage_error_mv         = (int32_t)p_config->voltage_target_mv -
@@ -88,10 +91,52 @@ static void enter_constant_voltage(const svc_measure_value_t *p_value)
     g_charge_state                    = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
 }
 
+/* Select one normal state without changing the applied duty. The CC entry and
+ * release conditions are the original thresholds, including their hysteresis.
+ */
+static void select_tracking_state(const svc_measure_value_t *p_value)
+{
+    const svc_charge_config_t *p_config = svc_charge_config_get();
+    svc_charge_state_t         previous = g_charge_state;
+    uint8_t                    cc;
+
+    if(NULL == p_value)
+    {
+        return;
+    }
+    cc = (SVC_CHARGE_STATE_CONSTANT_CURRENT == previous) ? 1U : 0U;
+    if(0U == cc)
+    {
+        cc = (p_config->current_target_ma - p_config->current_deadband_ma <=
+              p_value->input_current_ma)
+                 ? 1U
+                 : 0U;
+    }
+    else if(p_value->input_current_ma < p_config->current_target_ma &&
+            p_config->current_target_ma - p_value->input_current_ma >=
+                SVC_CHARGE_CC_RELEASE_MARGIN_MA &&
+            p_config->current_target_ma - p_value->input_current_ma >
+                p_config->current_deadband_ma)
+    {
+        cc = 0U;
+    }
+    g_charge_state           = (0U != cc) ? SVC_CHARGE_STATE_CONSTANT_CURRENT
+                                          : SVC_CHARGE_STATE_MPPT;
+    g_charge_current_limited = cc;
+    if(previous != g_charge_state && 0U != cc)
+    {
+        svc_charge_mppt_pause(g_charge_duty_permille);
+    }
+    else if(previous != g_charge_state && 0U == cc &&
+            SVC_CHARGE_MPPT_PHASE_STARTUP != svc_charge_mppt_get_phase())
+    {
+        svc_charge_mppt_resume(g_charge_duty_permille);
+    }
+}
 static platform_err_t
-calculate_running_duty(const svc_measure_value_t   *p_value,
-                       uint16_t                     current_duty_permille,
-                       svc_charge_control_result_t *p_result)
+calculate_tracking_duty(const svc_measure_value_t   *p_value,
+                        uint16_t                     current_duty_permille,
+                        svc_charge_control_result_t *p_result)
 {
     const svc_charge_config_t *p_config = svc_charge_config_get();
     svc_charge_mppt_result_t   mppt_result;
@@ -105,23 +150,7 @@ calculate_running_duty(const svc_measure_value_t   *p_value,
     {
         return PLATFORM_ERR_PARAM;
     }
-    if(0U == g_charge_current_limited)
-    {
-        if((p_config->current_target_ma - p_config->current_deadband_ma) <=
-           p_value->input_current_ma)
-        {
-            g_charge_current_limited = 1U;
-        }
-    }
-    else if(p_value->input_current_ma < p_config->current_target_ma &&
-            (p_config->current_target_ma - p_value->input_current_ma) >=
-                SVC_CHARGE_CC_RELEASE_MARGIN_MA &&
-            (p_config->current_target_ma - p_value->input_current_ma) >
-                p_config->current_deadband_ma)
-    {
-        g_charge_current_limited = 0U;
-    }
-    if(0U != g_charge_current_limited)
+    if(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_state)
     {
         svc_charge_mppt_pause(current_duty_permille);
         return svc_charge_control_calculate_cc(p_value, current_duty_permille,
@@ -411,12 +440,13 @@ static void process_start_settle(void)
         }
         else
         {
-            g_charge_state = SVC_CHARGE_STATE_CONSTANT_CURRENT;
+            svc_charge_mppt_startup_begin();
+            select_tracking_state(&value);
         }
     }
 }
 
-static void process_constant_current(void)
+static void process_power_tracking(void)
 {
     const svc_charge_config_t  *p_config = svc_charge_config_get();
     svc_measure_value_t         value;
@@ -440,8 +470,9 @@ static void process_constant_current(void)
         enter_constant_voltage(&value);
         return;
     }
-    status = calculate_running_duty(&value, g_charge_duty_permille,
-                                    &control_result);
+    select_tracking_state(&value);
+    status = calculate_tracking_duty(&value, g_charge_duty_permille,
+                                     &control_result);
     if(PLATFORM_ERR_OK != status)
     {
         enter_fault(SVC_CHARGE_FAULT_CONFIG, status);
@@ -474,6 +505,17 @@ static void process_constant_current(void)
     g_charge_duty_permille = control_result.duty_permille;
 }
 
+/* Separate entry points; common sampling/protection/output handling is shared.
+ */
+static void process_mppt(void)
+{
+    process_power_tracking();
+}
+
+static void process_constant_current(void)
+{
+    process_power_tracking();
+}
 static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
                                      uint32_t            voltage_target_mv,
                                      svc_charge_fault_t *p_fault)
@@ -538,7 +580,7 @@ static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
     return PLATFORM_ERR_OK;
 }
 
-static void enter_full_wait(void)
+static void enter_maintenance_idle(void)
 {
     platform_err_t status = bsp_power_path_charge_stop();
 
@@ -551,7 +593,7 @@ static void enter_full_wait(void)
     g_charge_duty_high_limited = 0U;
     reset_mppt_runtime();
     g_charge_status = PLATFORM_ERR_OK;
-    g_charge_state  = SVC_CHARGE_STATE_FULL_WAIT;
+    g_charge_state  = SVC_CHARGE_STATE_MAINTENANCE;
 }
 
 static void process_wake_cv(void)
@@ -584,7 +626,7 @@ static void process_wake_cv(void)
            value.input_current_ma)
     {
         reset_mppt_runtime();
-        g_charge_state = SVC_CHARGE_STATE_CONSTANT_CURRENT;
+        select_tracking_state(&value);
     }
 }
 
@@ -614,7 +656,7 @@ static void process_constant_voltage(void)
                                     (int32_t)value.input_current_ma;
         g_charge_voltage_error_mv = (int32_t)p_config->voltage_target_mv -
                                     (int32_t)value.battery_voltage_mv;
-        g_charge_state            = SVC_CHARGE_STATE_CONSTANT_CURRENT;
+        select_tracking_state(&value);
         return;
     }
     status = adjust_cv_duty(&value, p_config->voltage_target_mv, &fault);
@@ -632,29 +674,21 @@ static void process_constant_voltage(void)
     }
     if(0U != svc_charge_maintenance_update_completion(&value))
     {
-        enter_full_wait();
+        enter_maintenance_idle();
     }
 }
 
-static void process_full_wait(void)
+static void start_maintenance(const svc_measure_value_t *p_value)
 {
     const svc_charge_config_t *p_config = svc_charge_config_get();
-    svc_measure_value_t        value;
     uint16_t                   duty_permille;
-    uint8_t                    is_new;
-    svc_charge_fault_t         fault;
-    platform_err_t status = get_new_measurement(&value, &is_new, &fault, 0U);
+    platform_err_t             status;
 
-    if(PLATFORM_ERR_OK != status)
-    {
-        enter_fault(fault, status);
-        return;
-    }
-    if(0U == is_new)
+    if(NULL == p_value)
     {
         return;
     }
-    status = svc_charge_maintenance_calculate_start_duty(&value,
+    status = svc_charge_maintenance_calculate_start_duty(p_value,
                                                          &duty_permille);
     if(PLATFORM_ERR_OK != status)
     {
@@ -669,12 +703,41 @@ static void process_full_wait(void)
     g_charge_duty_permille     = duty_permille;
     g_charge_duty_high_limited = 0U;
     g_charge_current_error_ma  = (int32_t)p_config->current_target_ma -
-                                 (int32_t)value.input_current_ma;
+                                 (int32_t)p_value->input_current_ma;
     g_charge_voltage_error_mv  = (int32_t)
                                      p_config->maintenance.voltage_target_mv -
-                                 (int32_t)value.battery_voltage_mv;
+                                 (int32_t)p_value->battery_voltage_mv;
     g_charge_status            = PLATFORM_ERR_OK;
     g_charge_state             = SVC_CHARGE_STATE_MAINTENANCE;
+}
+
+static void resume_charging_from_maintenance(const svc_measure_value_t *p_value)
+{
+    const svc_charge_config_t *p_config = svc_charge_config_get();
+
+    if(NULL == p_value)
+    {
+        return;
+    }
+    svc_charge_maintenance_reset();
+    reset_mppt_runtime();
+    if(0U == g_charge_duty_permille)
+    {
+        /* Idle maintenance has no applied D to hand over. Use normal checked
+         * startup instead of inventing a fault or tracking from zero duty. */
+        g_charge_status = PLATFORM_ERR_BUSY;
+        g_charge_state  = SVC_CHARGE_STATE_WAIT_SAMPLE;
+        return;
+    }
+    if((p_config->voltage_target_mv - p_config->voltage_deadband_mv) <=
+       p_value->battery_voltage_mv)
+    {
+        enter_constant_voltage(p_value);
+    }
+    else
+    {
+        select_tracking_state(p_value);
+    }
 }
 
 static void process_maintenance(void)
@@ -694,6 +757,18 @@ static void process_maintenance(void)
     {
         return;
     }
+    /* Wait for the initial maintenance start with PWM off. Once running,
+     * ordinary voltage error belongs to CV; protection may still stop PWM. */
+    if(0U == g_charge_duty_permille)
+    {
+        if(0U != svc_charge_maintenance_update_recharge_request(&value))
+        {
+            resume_charging_from_maintenance(&value);
+            return;
+        }
+        start_maintenance(&value);
+        return;
+    }
     status = svc_charge_maintenance_calculate_cv(&value, g_charge_duty_permille,
                                                  &control_result, &fault);
     if(PLATFORM_ERR_OK != status)
@@ -706,7 +781,7 @@ static void process_maintenance(void)
     g_charge_duty_high_limited = control_result.duty_high_limited;
     if(0U != svc_charge_maintenance_update_recharge_request(&value))
     {
-        enter_fault(SVC_CHARGE_FAULT_INPUT_VOLTAGE, PLATFORM_ERR_HW);
+        resume_charging_from_maintenance(&value);
         return;
     }
     if(0U == control_result.duty_changed)
@@ -876,6 +951,10 @@ void svc_charge_process(void)
     {
         process_wake_cv();
     }
+    else if(SVC_CHARGE_STATE_MPPT == g_charge_state)
+    {
+        process_mppt();
+    }
     else if(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_state)
     {
         process_constant_current();
@@ -883,10 +962,6 @@ void svc_charge_process(void)
     else if(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state)
     {
         process_constant_voltage();
-    }
-    else if(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state)
-    {
-        process_full_wait();
     }
     else if(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state)
     {

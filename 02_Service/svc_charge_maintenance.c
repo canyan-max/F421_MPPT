@@ -9,6 +9,7 @@
 
 /* includes -----------------------------------------------------------------*/
 #include "svc_charge_maintenance.h"
+#include "svc_charge_cv.h"
 #include "svc_charge_config.h"
 /* define   -----------------------------------------------------------------*/
 #define SVC_CHARGE_MAINTENANCE_DISCHARGE_EXIT_MA (200U)
@@ -132,10 +133,8 @@ uint8_t svc_charge_maintenance_update_recharge_request(
     uint32_t                   recharge_ticks = delay_ms_to_ticks(
         p_config->maintenance.recharge_delay_ms);
 
-    if(NULL == p_value ||
-       -(int32_t)SVC_CHARGE_MAINTENANCE_DISCHARGE_EXIT_MA <
-           p_value->battery_current_ma ||
-       p_config->maintenance.recharge_voltage_mv < p_value->battery_voltage_mv)
+    if(NULL == p_value || -(int32_t)SVC_CHARGE_MAINTENANCE_DISCHARGE_EXIT_MA <
+                              p_value->battery_current_ma)
     {
         g_charge_maintenance_recharge_tick_count = 0U;
         return 0U;

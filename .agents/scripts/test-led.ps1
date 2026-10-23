@@ -123,9 +123,10 @@ int main(void)
     assert(PLATFORM_ERR_PARAM == bsp_led_set(0U, 0U, 2U));
     assert(writes == g_test_writes);
 
-    for(index = SVC_CHARGE_STATE_OFF; index <= SVC_CHARGE_STATE_MAINTENANCE; index++)
+    for(index = SVC_CHARGE_STATE_OFF; index <= SVC_CHARGE_STATE_MPPT; index++)
     {
         unsigned int active = SVC_CHARGE_STATE_WAKE_CV == index ||
+                              SVC_CHARGE_STATE_MPPT == index ||
                               SVC_CHARGE_STATE_CONSTANT_CURRENT == index ||
                               SVC_CHARGE_STATE_CONSTANT_VOLTAGE == index ||
                               SVC_CHARGE_STATE_MAINTENANCE == index;
