@@ -16,10 +16,17 @@
 #include "svc_charge_mppt.h"
 #include "svc_measure.h"
 #include "bsp_power_path.h"
+#include "bsp_measure.h"
 /* define   -----------------------------------------------------------------*/
 #define SVC_CHARGE_CC_RELEASE_MARGIN_MA (100U)
 
 /* typedef ------------------------------------------------------------------*/
+typedef enum SVC_CHARGE_SAMPLE_MODE_T
+{
+    SVC_CHARGE_SAMPLE_NORMAL = 0U,
+    SVC_CHARGE_SAMPLE_WAKE,
+    SVC_CHARGE_SAMPLE_STANDBY,
+} svc_charge_sample_mode_t;
 /* variables ----------------------------------------------------------------*/
 svc_charge_state_t  g_charge_state = SVC_CHARGE_STATE_OFF;
 svc_charge_fault_t  g_charge_fault;
@@ -45,7 +52,10 @@ uint8_t g_charge_current_limited;
 uint16_t g_charge_cv_duty_ceiling_permille;
 uint8_t  g_charge_cv_duty_ceiling_active;
 uint8_t  g_charge_cv_duty_ceiling_limited;
+uint32_t g_charge_full_wait_load_ticks;
+uint32_t g_charge_full_wait_recharge_ticks;
 /* private  functions  ------------------------------------------------------*/
+static void     return_to_wait_sample(void);
 static uint32_t delay_ms_to_ticks(uint32_t delay_ms)
 {
     uint32_t ticks = delay_ms / SVC_CHARGE_PROCESS_PERIOD_MS;
@@ -62,6 +72,16 @@ static void reset_recovery_runtime(void)
     g_charge_recovery_tick_count = 0U;
     g_charge_recovery_allowed    = 0U;
     g_charge_recovery_armed      = 0U;
+}
+
+static void reset_control_runtime(void)
+{
+    g_charge_stale_tick_count  = 0U;
+    g_charge_settle_tick_count = 0U;
+    g_charge_current_error_ma  = 0;
+    g_charge_voltage_error_mv  = 0;
+    g_charge_duty_high_limited = 0U;
+    reset_recovery_runtime();
 }
 
 static void reset_mppt_runtime(void)
@@ -245,10 +265,10 @@ static void enter_fault(svc_charge_fault_t fault, platform_err_t status)
     }
 }
 
-static platform_err_t get_new_measurement(svc_measure_value_t *p_value,
-                                          uint8_t             *p_is_new,
-                                          svc_charge_fault_t  *p_fault,
-                                          uint8_t allow_missing_battery)
+static platform_err_t get_new_measurement(svc_measure_value_t     *p_value,
+                                          uint8_t                 *p_is_new,
+                                          svc_charge_fault_t      *p_fault,
+                                          svc_charge_sample_mode_t sample_mode)
 {
     const svc_charge_config_t *p_config = svc_charge_config_get();
     uint32_t                   sequence;
@@ -267,15 +287,40 @@ static platform_err_t get_new_measurement(svc_measure_value_t *p_value,
         *p_fault = SVC_CHARGE_FAULT_MEASUREMENT;
         return status;
     }
-    fault = (0U != allow_missing_battery)
-                ? svc_charge_protection_check_wake(p_value)
-                : svc_charge_protection_check_immediate(p_value);
+    if(SVC_CHARGE_SAMPLE_STANDBY == sample_mode)
+    {
+        /* With PWM off, absent input is a waiting condition, not a running
+         * input fault. Sensor, voltage, current and temperature checks remain.
+         */
+        if(0U == svc_measure_is_ready() || 0U == p_value->battery_voltage_mv)
+        {
+            fault = SVC_CHARGE_FAULT_MEASUREMENT;
+        }
+        else if(p_config->current_limit_ma <= p_value->input_current_ma)
+        {
+            fault = SVC_CHARGE_FAULT_CHARGE_OVERCURRENT;
+        }
+        else if(SVC_MEASURE_TEMPERATURE_INVALID == p_value->temperature_deci_c)
+        {
+            fault = SVC_CHARGE_FAULT_TEMPERATURE_SENSOR;
+        }
+        else
+        {
+            fault = svc_charge_protection_check_start_voltage(p_value);
+        }
+    }
+    else
+    {
+        fault = (SVC_CHARGE_SAMPLE_WAKE == sample_mode)
+                    ? svc_charge_protection_check_wake(p_value)
+                    : svc_charge_protection_check_immediate(p_value);
+    }
     if(SVC_CHARGE_FAULT_NONE != fault)
     {
         *p_fault = fault;
         return PLATFORM_ERR_HW;
     }
-    if(0U != allow_missing_battery &&
+    if(SVC_CHARGE_SAMPLE_WAKE == sample_mode &&
        0U != svc_charge_control_is_wake_cv_required(p_value) &&
        0U == svc_charge_control_is_input_voltage_sufficient(p_value, 1U))
     {
@@ -395,7 +440,8 @@ static void process_start_settle(void)
     uint16_t                   duty_permille;
     uint8_t                    is_new;
     svc_charge_fault_t         fault;
-    platform_err_t status = get_new_measurement(&value, &is_new, &fault, 0U);
+    platform_err_t status = get_new_measurement(&value, &is_new, &fault,
+                                                SVC_CHARGE_SAMPLE_NORMAL);
 
     if(PLATFORM_ERR_OK != status)
     {
@@ -453,7 +499,8 @@ static void process_power_tracking(void)
     svc_charge_control_result_t control_result;
     uint8_t                     is_new;
     svc_charge_fault_t          fault;
-    platform_err_t status = get_new_measurement(&value, &is_new, &fault, 0U);
+    platform_err_t status = get_new_measurement(&value, &is_new, &fault,
+                                                SVC_CHARGE_SAMPLE_NORMAL);
 
     if(PLATFORM_ERR_OK != status)
     {
@@ -580,7 +627,7 @@ static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
     return PLATFORM_ERR_OK;
 }
 
-static void enter_maintenance_idle(void)
+static void enter_charge_wait(void)
 {
     platform_err_t status = bsp_power_path_charge_stop();
 
@@ -592,8 +639,15 @@ static void enter_maintenance_idle(void)
     g_charge_duty_permille     = 0U;
     g_charge_duty_high_limited = 0U;
     reset_mppt_runtime();
+#if SVC_CHARGE_ENABLE_MAINTENANCE
+    svc_charge_maintenance_idle();
+    g_charge_state = SVC_CHARGE_STATE_MAINTENANCE;
+#else
+    g_charge_full_wait_load_ticks     = 0U;
+    g_charge_full_wait_recharge_ticks = 0U;
+    g_charge_state                    = SVC_CHARGE_STATE_FULL_WAIT;
+#endif
     g_charge_status = PLATFORM_ERR_OK;
-    g_charge_state  = SVC_CHARGE_STATE_MAINTENANCE;
 }
 
 static void process_wake_cv(void)
@@ -602,7 +656,8 @@ static void process_wake_cv(void)
     svc_measure_value_t        value;
     uint8_t                    is_new;
     svc_charge_fault_t         fault;
-    platform_err_t status = get_new_measurement(&value, &is_new, &fault, 1U);
+    platform_err_t status = get_new_measurement(&value, &is_new, &fault,
+                                                SVC_CHARGE_SAMPLE_WAKE);
 
     if(PLATFORM_ERR_OK != status)
     {
@@ -636,7 +691,8 @@ static void process_constant_voltage(void)
     svc_measure_value_t        value;
     uint8_t                    is_new;
     svc_charge_fault_t         fault;
-    platform_err_t status = get_new_measurement(&value, &is_new, &fault, 0U);
+    platform_err_t status = get_new_measurement(&value, &is_new, &fault,
+                                                SVC_CHARGE_SAMPLE_NORMAL);
 
     if(PLATFORM_ERR_OK != status)
     {
@@ -672,12 +728,14 @@ static void process_constant_voltage(void)
         enter_fault(fault, PLATFORM_ERR_HW);
         return;
     }
-    if(0U != svc_charge_maintenance_update_completion(&value))
+    if(0U != svc_charge_maintenance_update_completion(&value) &&
+       0U != svc_charge_maintenance_update_idle_request(&value))
     {
-        enter_maintenance_idle();
+        enter_charge_wait();
     }
 }
 
+#if SVC_CHARGE_ENABLE_MAINTENANCE
 static void start_maintenance(const svc_measure_value_t *p_value)
 {
     const svc_charge_config_t *p_config = svc_charge_config_get();
@@ -700,7 +758,8 @@ static void start_maintenance(const svc_measure_value_t *p_value)
         enter_fault(SVC_CHARGE_FAULT_POWER_PATH, status);
         return;
     }
-    g_charge_duty_permille     = duty_permille;
+    g_charge_duty_permille = duty_permille;
+    svc_charge_maintenance_start();
     g_charge_duty_high_limited = 0U;
     g_charge_current_error_ma  = (int32_t)p_config->current_target_ma -
                                  (int32_t)p_value->input_current_ma;
@@ -746,7 +805,8 @@ static void process_maintenance(void)
     svc_measure_value_t         value;
     uint8_t                     is_new;
     svc_charge_fault_t          fault;
-    platform_err_t status = get_new_measurement(&value, &is_new, &fault, 0U);
+    platform_err_t status = get_new_measurement(&value, &is_new, &fault,
+                                                SVC_CHARGE_SAMPLE_NORMAL);
 
     if(PLATFORM_ERR_OK != status)
     {
@@ -771,6 +831,15 @@ static void process_maintenance(void)
     }
     status = svc_charge_maintenance_calculate_cv(&value, g_charge_duty_permille,
                                                  &control_result, &fault);
+    if(PLATFORM_ERR_BUSY == status && SVC_CHARGE_FAULT_NONE == fault)
+    {
+        enter_charge_wait();
+        if(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state)
+        {
+            svc_charge_maintenance_wait();
+        }
+        return;
+    }
     if(PLATFORM_ERR_OK != status)
     {
         enter_fault(fault, status);
@@ -797,18 +866,72 @@ static void process_maintenance(void)
     g_charge_duty_permille = control_result.duty_permille;
 }
 
+#else
+static void process_full_wait(void)
+{
+    const svc_charge_config_t *p_config = svc_charge_config_get();
+    svc_measure_value_t        value;
+    svc_charge_fault_t         fault;
+    uint8_t                    is_new;
+    uint8_t                    wake_requested;
+    uint32_t                   recharge_ticks = delay_ms_to_ticks(
+        p_config->maintenance.recharge_delay_ms);
+    platform_err_t status = get_new_measurement(&value, &is_new, &fault,
+                                                SVC_CHARGE_SAMPLE_STANDBY);
+
+    if(PLATFORM_ERR_OK != status)
+    {
+        enter_fault(fault, status);
+        return;
+    }
+    if(0U == is_new)
+    {
+        return;
+    }
+    if(SVC_CHARGE_LOAD_ON_MA <= value.output_current_ma)
+    {
+        if(g_charge_full_wait_load_ticks < p_config->start_settle_ticks)
+        {
+            g_charge_full_wait_load_ticks++;
+        }
+    }
+    else if(SVC_CHARGE_LOAD_OFF_MA >= value.output_current_ma)
+    {
+        g_charge_full_wait_load_ticks = 0U;
+    }
+    if(value.battery_voltage_mv <= p_config->maintenance.recharge_voltage_mv)
+    {
+        if(g_charge_full_wait_recharge_ticks < recharge_ticks)
+        {
+            g_charge_full_wait_recharge_ticks++;
+        }
+    }
+    else
+    {
+        g_charge_full_wait_recharge_ticks = 0U;
+    }
+    wake_requested = (p_config->start_settle_ticks <=
+                          g_charge_full_wait_load_ticks ||
+                      recharge_ticks <= g_charge_full_wait_recharge_ticks);
+    if(0U != wake_requested && 0U != is_start_condition_valid(&value))
+    {
+        /* No legacy maintenance CV/build/reverse heuristic runs in standby.
+         * Reuse the checked normal startup; never reuse the pre-stop duty. */
+        return_to_wait_sample();
+    }
+}
+#endif
+
 static void return_to_wait_sample(void)
 {
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
-    g_charge_recovery_tick_count = 0U;
-    g_charge_recovery_allowed    = 0U;
-    g_charge_recovery_armed      = 0U;
-    g_charge_stale_tick_count    = 0U;
-    g_charge_fault               = SVC_CHARGE_FAULT_NONE;
-    g_charge_status              = PLATFORM_ERR_BUSY;
-    g_charge_state               = SVC_CHARGE_STATE_WAIT_SAMPLE;
+    reset_recovery_runtime();
+    g_charge_stale_tick_count = 0U;
+    g_charge_fault            = SVC_CHARGE_FAULT_NONE;
+    g_charge_status           = PLATFORM_ERR_BUSY;
+    g_charge_state            = SVC_CHARGE_STATE_WAIT_SAMPLE;
 }
 
 static void process_fault_recovery(void)
@@ -885,15 +1008,12 @@ platform_err_t svc_charge_init(svc_charge_battery_system_t system)
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
-    g_charge_duty_permille     = 0U;
-    g_charge_stale_tick_count  = 0U;
-    g_charge_settle_tick_count = 0U;
-    g_charge_current_error_ma  = 0;
-    g_charge_voltage_error_mv  = 0;
-    reset_recovery_runtime();
+    g_charge_duty_permille = 0U;
+    reset_control_runtime();
     g_charge_fault_snapshot_valid = 0U;
-    g_charge_duty_high_limited    = 0U;
     stop_status                   = bsp_power_path_charge_stop();
+    bsp_measure_fast_ovp_enable(PLATFORM_ERR_OK == config_status &&
+                                SVC_CHARGE_BATTERY_SYSTEM_12V == system);
     if(PLATFORM_ERR_OK != stop_status)
     {
         g_charge_status = stop_status;
@@ -924,13 +1044,8 @@ platform_err_t svc_charge_start(void)
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
-    g_charge_stale_tick_count  = 0U;
-    g_charge_settle_tick_count = 0U;
-    g_charge_current_error_ma  = 0;
-    g_charge_voltage_error_mv  = 0;
-    reset_recovery_runtime();
+    reset_control_runtime();
     g_charge_fault_snapshot_valid = 0U;
-    g_charge_duty_high_limited    = 0U;
     g_charge_fault                = SVC_CHARGE_FAULT_NONE;
     g_charge_status               = PLATFORM_ERR_BUSY;
     g_charge_state                = SVC_CHARGE_STATE_WAIT_SAMPLE;
@@ -963,10 +1078,17 @@ void svc_charge_process(void)
     {
         process_constant_voltage();
     }
+#if SVC_CHARGE_ENABLE_MAINTENANCE
     else if(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state)
     {
         process_maintenance();
     }
+#else
+    else if(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state)
+    {
+        process_full_wait();
+    }
+#endif
     else if(SVC_CHARGE_STATE_FAULT == g_charge_state)
     {
         process_fault_recovery();
@@ -978,20 +1100,15 @@ platform_err_t svc_charge_stop(void)
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
-    g_charge_status            = bsp_power_path_charge_stop();
-    g_charge_fault             = (PLATFORM_ERR_OK == g_charge_status)
-                                     ? SVC_CHARGE_FAULT_NONE
-                                     : SVC_CHARGE_FAULT_POWER_PATH;
-    g_charge_state             = (PLATFORM_ERR_OK == g_charge_status)
-                                     ? SVC_CHARGE_STATE_OFF
-                                     : SVC_CHARGE_STATE_FAULT;
-    g_charge_duty_permille     = 0U;
-    g_charge_stale_tick_count  = 0U;
-    g_charge_settle_tick_count = 0U;
-    g_charge_current_error_ma  = 0;
-    g_charge_voltage_error_mv  = 0;
-    reset_recovery_runtime();
-    g_charge_duty_high_limited = 0U;
+    g_charge_status        = bsp_power_path_charge_stop();
+    g_charge_fault         = (PLATFORM_ERR_OK == g_charge_status)
+                                 ? SVC_CHARGE_FAULT_NONE
+                                 : SVC_CHARGE_FAULT_POWER_PATH;
+    g_charge_state         = (PLATFORM_ERR_OK == g_charge_status)
+                                 ? SVC_CHARGE_STATE_OFF
+                                 : SVC_CHARGE_STATE_FAULT;
+    g_charge_duty_permille = 0U;
+    reset_control_runtime();
     return g_charge_status;
 }
 

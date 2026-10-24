@@ -25,16 +25,33 @@ extern "C"
 /* define -------------------------------------------------------------------*/
 
 /* typedef ------------------------------------------------------------------*/
+typedef enum SVC_CHARGE_MAINTENANCE_PHASE_T
+{
+    SVC_CHARGE_MAINTENANCE_PHASE_IDLE = 0U,
+    SVC_CHARGE_MAINTENANCE_PHASE_BUILD,
+    SVC_CHARGE_MAINTENANCE_PHASE_RUNNING,
+    SVC_CHARGE_MAINTENANCE_PHASE_WAIT,
+} svc_charge_maintenance_phase_t;
 
 /* variables ----------------------------------------------------------------*/
 
 /* function  ----------------------------------------------------------------*/
 void svc_charge_maintenance_reset(void);
+/* Called after successful PWM stop/start; does not clear full confirmation. */
+void svc_charge_maintenance_idle(void);
+void svc_charge_maintenance_start(void);
+/* Normal low-output pause; restart below the maintenance deadband. */
+void svc_charge_maintenance_wait(void);
 uint8_t
 svc_charge_maintenance_update_completion(const svc_measure_value_t *p_value);
+/* After full confirmation, keep CV supplying a present load. Request PWM-off
+ * standby only after no-load qualification. Main context/new samples. */
+uint8_t
+svc_charge_maintenance_update_idle_request(const svc_measure_value_t *p_value);
 platform_err_t
 svc_charge_maintenance_calculate_start_duty(const svc_measure_value_t *p_value,
                                             uint16_t *p_duty_permille);
+/* BUSY with fault NONE requests a normal PWM-off maintenance wait. */
 platform_err_t
 svc_charge_maintenance_calculate_cv(const svc_measure_value_t *p_value,
                                     uint16_t current_duty_permille,

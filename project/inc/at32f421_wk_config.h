@@ -128,7 +128,8 @@ extern volatile uint16_t g_adc_dma_buffer[12];
   void wk_nvic_config(void);
 
 /* add user code begin exported functions */
-
+/* Project assembly hook: after ADC/DMA/TMR1 init, before sampling starts. */
+void app_startup_before_sampling(void);
 /* add user code end exported functions */
 
 #ifdef __cplusplus

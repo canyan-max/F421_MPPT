@@ -13,6 +13,7 @@
 #include <stddef.h>
 #include "plat_adc.h"
 #include "bsp_measure.h"
+#include "plat_pwm.h"
 #include "board_measure_config.h"
 #include "board_resources.h"
 #include "filter.h"
@@ -49,6 +50,9 @@ static bsp_measure_data_callback_t  pf_measure_data;
 static bsp_measure_error_callback_t pf_measure_error;
 static bsp_measure_error_t          g_last_error;
 static uint8_t                      g_measure_initialized;
+static volatile uint8_t             g_measure_fast_ovp_enabled;
+volatile uint16_t                   g_charge_fast_ovp_trip_raw;
+volatile platform_err_t             g_charge_fast_ovp_off_status;
 /* private functions --------------------------------------------------------*/
 static void report_error(bsp_measure_error_t error, platform_err_t status)
 {
@@ -117,7 +121,7 @@ static platform_err_t filter_measure(bsp_measure_internal_value_t *p_value)
     p_value->output_current_ma  = (uint32_t)output_current_average;
     return PLATFORM_ERR_OK;
 }
-/* ISR only copies raw samples; no conversion or pointer retention. */
+/* ISR performs bounded raw safety check and copies, no unit conversion. */
 static void measure_adc_callback(plat_adc_id_t            id,
                                  plat_adc_event_t         event,
                                  const volatile uint16_t *p_samples,
@@ -144,6 +148,12 @@ static void measure_adc_callback(plat_adc_id_t            id,
     {
         g_adc_dma_error_count++;
         return;
+    }
+    if(0U != g_measure_fast_ovp_enabled &&
+       p_samples[BSP_MEASURE_BAT_VOL] >= BOARD_MEASURE_BAT_FAST_OVP_RAW)
+    {
+        g_charge_fast_ovp_off_status = plat_pwm_outputs_off();
+        g_charge_fast_ovp_trip_raw   = p_samples[BSP_MEASURE_BAT_VOL];
     }
     for(index = 0U; index < BSP_MEASURE_CHANNEL_COUNT; index++)
     {
@@ -413,6 +423,11 @@ void bsp_measure_set_callbacks(bsp_measure_data_callback_t  pf_data,
     pf_measure_data  = pf_data;
     pf_measure_error = pf_error;
     g_last_error     = BSP_MEASURE_ERROR_NONE;
+}
+
+void bsp_measure_fast_ovp_enable(uint8_t enabled)
+{
+    g_measure_fast_ovp_enabled = (0U != enabled) ? 1U : 0U;
 }
 
 platform_err_t bsp_measure_init(void)

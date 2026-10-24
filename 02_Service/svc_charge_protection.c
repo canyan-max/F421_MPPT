@@ -61,6 +61,10 @@ svc_charge_protection_check_immediate(const svc_measure_value_t *p_value)
     {
         return SVC_CHARGE_FAULT_MEASUREMENT;
     }
+    if(p_config->battery_overvoltage_mv <= p_value->battery_voltage_mv)
+    {
+        return SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE;
+    }
     if(p_value->input_voltage_mv <= p_value->battery_voltage_mv)
     {
         return SVC_CHARGE_FAULT_INPUT_VOLTAGE;
@@ -94,8 +98,7 @@ svc_charge_protection_check_wake(const svc_measure_value_t *p_value)
     {
         return SVC_CHARGE_FAULT_INPUT_VOLTAGE;
     }
-    if((p_config->voltage_target_mv + p_config->voltage_deadband_mv) <
-       p_value->battery_voltage_mv)
+    if(p_config->battery_overvoltage_mv <= p_value->battery_voltage_mv)
     {
         return SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE;
     }
@@ -220,8 +223,7 @@ svc_charge_protection_check_start_voltage(const svc_measure_value_t *p_value)
     {
         return SVC_CHARGE_FAULT_MEASUREMENT;
     }
-    return ((p_config->voltage_target_mv + p_config->voltage_deadband_mv) <
-            p_value->battery_voltage_mv)
+    return (p_config->battery_overvoltage_mv <= p_value->battery_voltage_mv)
                ? SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE
                : SVC_CHARGE_FAULT_NONE;
 }

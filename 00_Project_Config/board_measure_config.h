@@ -1,7 +1,8 @@
 /**
  ******************************************************************************
  *@file               :   board_measure_config.h
- *@brief              :   Define nominal board measurement conversion parameters.
+ *@brief              :   Define nominal board measurement conversion
+ * parameters.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
  ******************************************************************************
@@ -18,6 +19,8 @@
 /* 12-bit ADC: 4096 quantization levels, codes 0..4095. */
 #define BOARD_MEASURE_ADC_LEVELS (4096U)
 #define BOARD_MEASURE_ADC_MAX (4095U)
+/* User-selected 12 V trial limit, not a calibrated 14.6 V equivalent. */
+#define BOARD_MEASURE_BAT_FAST_OVP_RAW (1760U)
 /* R16 = 100 kohm, R15 = 10 kohm. Nominal, not calibrated. */
 #define BOARD_MEASURE_BAT_GAIN         (11U)
 /* Q3 PNP model: Vin = 20 * Vadc + 2 * VEB. VEB assumed 650 mV.
@@ -42,6 +45,3 @@
 /* function  ----------------------------------------------------------------*/
 /* end of file --------------------------------------------------------------*/
 #endif /* BOARD_MEASURE_CONFIG_H */
-
-
-

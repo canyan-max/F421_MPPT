@@ -60,8 +60,8 @@
 /* private variables ---------------------------------------------------------*/
 /* add user code begin private variables */
 /* Startup shutdown and measurement initialization results for Watch. */
-static volatile platform_err_t g_measure_init_status;
-static volatile platform_err_t g_charge_init_status;
+static volatile platform_err_t g_measure_init_status = PLATFORM_ERR_BUSY;
+static volatile platform_err_t g_charge_init_status = PLATFORM_ERR_BUSY;
 static volatile platform_err_t g_charge_start_status = PLATFORM_ERR_BUSY;
 static uint32_t                g_charge_task_last_ms;
 static volatile platform_err_t g_discharge_init_status;
@@ -79,6 +79,21 @@ static void app_discharge_task_process(void);
 
 /* private user code ---------------------------------------------------------*/
 /* add user code begin 0 */
+void app_startup_before_sampling(void)
+{
+    /* Called from TMR15's retained init block, before any ADC trigger. */
+    g_measure_init_status = svc_measure_init();
+    if(PLATFORM_ERR_OK != g_measure_init_status)
+    {
+        dma_channel_enable(DMA1_CHANNEL1, FALSE);
+    }
+    g_led_status = svc_led_init();
+    /* Bind before the generated EXINT setup enables PB0. */
+    g_discharge_bind_status = bsp_power_path_discharge_init();
+    g_charge_init_status =
+        svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V);
+}
+
 static void app_charge_task_process(void)
 {
     uint32_t now_ms = wk_timebase_get();
@@ -150,24 +165,8 @@ int main(void)
                         DMA1_CHANNEL1_BUFFER_SIZE);
   dma_channel_enable(DMA1_CHANNEL1, TRUE);
 
-  /* add user code begin measure_init */
-    /* Bind acquisition before TMR15 starts producing ADC triggers. */
-    g_measure_init_status = svc_measure_init();
-    if(PLATFORM_ERR_OK != g_measure_init_status)
-    {
-        dma_channel_enable(DMA1_CHANNEL1, FALSE);
-    }
-  /* add user code end measure_init */
-
   /* init tmr1 function. */
   wk_tmr1_init();
-  /* add user code begin power_default_off */
-    g_led_status = svc_led_init();
-    /* Bind the synchronous fault callback before wk_exint_config arms PB0. */
-    g_discharge_bind_status = bsp_power_path_discharge_init();
-    g_charge_init_status =
-        svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V);
-  /* add user code end power_default_off */
 
   /* init usart1 function. */
   wk_usart1_init();
@@ -199,7 +198,7 @@ int main(void)
 
   while(1)
   {
-      /* add user code begin 3 */
+    /* add user code begin 3 */
       svc_measure_process();
       app_charge_task_process();
       app_discharge_task_process();

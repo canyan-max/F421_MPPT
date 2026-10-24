@@ -1,6 +1,5 @@
 param(
-    [string]$Gcc = 'D:\software_config\mingw64\mingw64\bin\gcc.exe',
-    [string]$BaselineDirectory
+    [string]$Gcc = 'D:\software_config\mingw64\mingw64\bin\gcc.exe'
 )
 $ErrorActionPreference = 'Stop'
 if (-not (Test-Path -LiteralPath $Gcc)) { throw "Compiler unavailable: $Gcc" }
@@ -33,6 +32,7 @@ static int16_t g_test_temperature = 250;
 static platform_err_t g_test_stop_status = PLATFORM_ERR_OK;
 static platform_err_t g_test_start_status = PLATFORM_ERR_OK;
 static uint16_t g_test_initial_duty;
+void bsp_measure_fast_ovp_enable(uint8_t enabled) { (void)enabled; }
 
 platform_err_t svc_measure_get(svc_measure_value_t *p_value)
 {
@@ -79,6 +79,11 @@ static void tick(void)
 extern uint32_t g_charge_full_confirm_tick_count;
 extern uint8_t g_charge_full_confirmed;
 extern uint32_t g_charge_maintenance_recharge_tick_count;
+extern svc_charge_maintenance_phase_t g_charge_maintenance_phase;
+extern uint32_t g_charge_maintenance_build_timeout_count;
+extern uint32_t g_charge_maintenance_low_output_wait_count;
+extern uint8_t g_charge_cv_load_active;
+extern uint32_t g_charge_cv_no_load_ticks;
 static void begin_tracking(void)
 {
     unsigned int i;
@@ -97,6 +102,7 @@ static void begin_tracking(void)
     assert(PLATFORM_ERR_OK == svc_charge_start());
     for(i = 0U; i < 3U; i++) { tick(); }
 }
+#if SVC_CHARGE_ENABLE_MAINTENANCE
 int run_split_tests(void)
 {
     unsigned int i;
@@ -174,7 +180,42 @@ int run_split_tests(void)
     assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
     puts("PASS: CV can release directly to CC; CV still preempts current regulation");
 
-    /* Full confirmation enters maintenance directly, initially with PWM off. */
+    /* Full confirmation alone must not interrupt a connected 1 A load. */
+    begin_tracking();
+    g_test_battery = 14403U;
+    g_test_current = 1205U;
+    g_test_load = 1047U;
+    tick();
+    duty = g_charge_duty_permille;
+    writes = g_test_stop_count;
+    for(i = 0U; i < 1250U; i++) { tick(); }
+    assert(1U == g_charge_full_confirmed);
+    assert(1000U == g_charge_full_confirm_tick_count);
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    assert(1U == g_test_pwm_on && duty == g_charge_duty_permille);
+    assert(writes == g_test_stop_count);
+    assert(1U == g_charge_cv_load_active && 0U == g_charge_cv_no_load_ticks);
+    g_test_load = (SVC_CHARGE_LOAD_ON_MA + SVC_CHARGE_LOAD_OFF_MA) / 2U;
+    for(i = 0U; i < 200U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    assert(1U == g_charge_cv_load_active); /* Inside hysteresis: retain presence. */
+    g_test_load = 20U;
+    for(i = 0U; i < 99U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    g_test_load = 100U;
+    tick(); /* Exact ON threshold cancels the pending no-load decision. */
+    assert(0U == g_charge_cv_no_load_ticks);
+    g_test_load = 20U;
+    for(i = 0U; i < 99U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
+    assert(0U == g_test_pwm_on && 0U == g_charge_duty_permille);
+    assert(1U == g_charge_full_confirmed);
+    puts("PASS: full CV keeps 1 A load powered; configured load hysteresis and");
+    puts("      continuous 1 s no-load decision before maintenance shutdown");
+
+    /* No-load qualification follows full confirmation, then PWM stops. */
     begin_tracking();
     g_test_battery = 14410U;
     g_test_current = 510U; /* Net battery current exactly +500 mA. */
@@ -187,9 +228,13 @@ int run_split_tests(void)
     for(i = 0U; i < 999U; i++) { tick(); }
     assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
     tick();
-    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
     assert(1U == g_charge_full_confirmed);
     assert(1000U == g_charge_full_confirm_tick_count);
+    for(i = 0U; i < 98U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
     assert(0U == g_charge_duty_permille && 0U == g_test_pwm_on);
     writes = g_test_set_count;
     duty = (uint16_t)g_test_start_count;
@@ -230,29 +275,29 @@ int run_split_tests(void)
         }
         assert(starts == g_test_start_count && stops == g_test_stop_count);
     }
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14100U;
     g_test_start_status = PLATFORM_ERR_HW;
     tick();
     assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
     assert(0U == g_test_pwm_on);
     begin_tracking();
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14100U;
     tick();
     assert(1U == g_test_pwm_on);
     g_test_stop_status = PLATFORM_ERR_HW;
-    enter_maintenance_idle();
+    enter_charge_wait();
     assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
     assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault);
     g_test_stop_status = PLATFORM_ERR_OK;
     tick();
     assert(0U == g_test_pwm_on);
-    puts("PASS: CV completion directly enters maintenance; 14.1 V restart,");
+    puts("PASS: full/no-load confirmation enters retained maintenance; 14.1 V restart,");
     puts("      continuous loaded CV across deadband, no stopped-PWM writes, start/stop errors");
 
     begin_tracking();
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14100U;
     tick();
     g_test_set_status = PLATFORM_ERR_HW;
@@ -263,9 +308,12 @@ int run_split_tests(void)
     assert(0U == g_test_pwm_on);
 
     begin_tracking();
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14100U;
     tick();
+    g_test_current = 100U;
+    tick(); tick(); /* Establish supply before checking the running guard. */
+    g_test_battery = 14070U; /* Actual supply demand, below voltage deadband. */
     g_test_current = 0U;
     g_test_load = 500U;
     for(i = 0U; i < 5U; i++) { tick(); }
@@ -273,7 +321,7 @@ int run_split_tests(void)
     assert(SVC_CHARGE_FAULT_INPUT_VOLTAGE == g_charge_fault);
     assert(0U == g_test_pwm_on);
     begin_tracking();
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14100U; /* Above old 13.8 V: no voltage prerequisite. */
     tick();
     g_test_current = 500U;
@@ -291,7 +339,7 @@ int run_split_tests(void)
     assert(SVC_CHARGE_MPPT_PHASE_REACQUIRE == svc_charge_mppt_get_phase());
 
     begin_tracking();
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14100U;
     tick();
     g_test_current = 4000U;
@@ -304,7 +352,7 @@ int run_split_tests(void)
     assert(SVC_CHARGE_MPPT_PHASE_PAUSED == svc_charge_mppt_get_phase());
 
     begin_tracking();
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14100U;
     tick();
     g_test_current = 1000U;
@@ -322,7 +370,7 @@ int run_split_tests(void)
     assert(duty == g_charge_duty_permille && 1U == g_test_pwm_on);
 
     begin_tracking();
-    enter_maintenance_idle();
+    enter_charge_wait();
     g_test_battery = 14200U; /* Waiting with PWM off also observes discharge. */
     g_test_load = 200U;
     for(i = 0U; i < 499U; i++) { tick(); }
@@ -336,7 +384,126 @@ int run_split_tests(void)
     assert(1U == g_test_pwm_on);
     puts("PASS: maintenance net-discharge handover without voltage gate/fault,");
     puts("      5 s boundary/reset, same-D MPPT/CC/CV choice, idle checked startup");
-    puts("PASS: maintenance 50 ms reverse-power guard still shuts PWM off");
+    puts("PASS: maintenance low-output fault retained when more supply is required");
+
+    /* Reproduce CV reaching maintenance, then intentional CV reduction at
+     * 14.130 V with a 1 A load. Low output must NOT become input fault 3. */
+    begin_tracking();
+    enter_charge_wait();
+    g_charge_full_confirmed = 1U;
+    g_test_battery = 14100U;
+    g_test_load = 1000U;
+    tick();
+    g_test_current = 1100U;
+    tick(); tick();
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_RUNNING == g_charge_maintenance_phase);
+    g_test_battery = 14130U;
+    g_test_current = 37U;
+    writes = g_charge_maintenance_low_output_wait_count;
+    for(i = 0U; i < 4U; i++) { tick(); }
+    assert(1U == g_test_pwm_on);
+    tick();
+    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
+    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_WAIT == g_charge_maintenance_phase);
+    assert(writes + 1U == g_charge_maintenance_low_output_wait_count);
+    assert(0U == g_test_pwm_on && 0U == g_charge_duty_permille);
+    assert(1U == g_charge_full_confirmed && 0U == g_charge_fault_snapshot_valid);
+    g_test_battery = 14100U;
+    tick();
+    assert(0U == g_test_pwm_on); /* Do not immediately restart at 14.1 V. */
+    g_test_battery = 14081U;
+    tick();
+    assert(0U == g_test_pwm_on);
+    g_test_battery = 14080U;
+    tick();
+    assert(1U == g_test_pwm_on);
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_BUILD == g_charge_maintenance_phase);
+    g_test_current = 1100U;
+    tick(); tick();
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_RUNNING == g_charge_maintenance_phase);
+    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
+    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
+    g_test_current = 37U;
+    g_test_battery = 14130U;
+    for(i = 0U; i < 4U; i++) { tick(); }
+    g_test_stop_status = PLATFORM_ERR_HW;
+    tick(); /* A failed normal OFF must still become a power-path fault. */
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault);
+    g_test_stop_status = PLATFORM_ERR_OK;
+    tick();
+    assert(0U == g_test_pwm_on);
+    puts("PASS: intentional low output enters normal WAIT without fault/CV restart,");
+    puts("      full flag preserved, deadband restart boundary, OFF failure retained");
+
+    /* Regression: 20 V input, 1 A load, restart exactly inside CV deadband. */
+    begin_tracking();
+    enter_charge_wait();
+    g_test_off_vin = 20000U;
+    g_test_on_vin = 20000U;
+    g_test_battery = 14099U;
+    g_test_current = 0U;
+    g_test_load = 1000U;
+    tick();
+    assert(705U == g_charge_duty_permille);
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_BUILD == g_charge_maintenance_phase);
+    for(i = 0U; i < 6U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
+    assert(708U == g_charge_duty_permille); /* One step per 20 ms, not held. */
+    g_test_current = 100U;
+    tick();
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_BUILD == g_charge_maintenance_phase);
+    g_test_current = 99U;
+    tick(); /* Confirmation must be continuous. */
+    g_test_current = 100U;
+    tick();
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_BUILD == g_charge_maintenance_phase);
+    tick();
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_RUNNING == g_charge_maintenance_phase);
+    duty = g_charge_duty_permille;
+    g_test_current = 1100U;
+    for(i = 0U; i < 10U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
+    assert(duty == g_charge_duty_permille && 1U == g_test_pwm_on);
+
+    begin_tracking();
+    enter_charge_wait();
+    g_test_battery = 14100U;
+    g_test_current = 0U;
+    g_test_load = 1000U;
+    tick();
+    writes = g_charge_maintenance_build_timeout_count;
+    for(i = 0U; i < 29U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_MAINTENANCE == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_INPUT_VOLTAGE == g_charge_fault);
+    assert(writes + 1U == g_charge_maintenance_build_timeout_count);
+    assert(0U == g_test_pwm_on);
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_IDLE == g_charge_maintenance_phase);
+
+    begin_tracking();
+    enter_charge_wait();
+    g_test_battery = 14100U;
+    g_test_current = 0U;
+    tick();
+    duty = g_charge_duty_permille;
+    g_test_battery = 14121U;
+    tick(); /* Voltage down-step must not be delayed by the build interval. */
+    assert(duty - 1U == g_charge_duty_permille);
+    g_test_battery = 14100U;
+    g_test_current = 4100U;
+    duty = g_charge_duty_permille;
+    tick();
+    assert(duty - 1U == g_charge_duty_permille); /* Current limit wins too. */
+    g_test_current = 12000U;
+    tick();
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_CHARGE_OVERCURRENT == g_charge_fault);
+    assert(0U == g_test_pwm_on);
+    puts("PASS: maintenance deadband startup builds supply at 1/20 ms,");
+    puts("      continuous 100 mA confirmation, bounded timeout, voltage/current priority");
 
     {
         svc_measure_value_t completion_value = {0};
@@ -373,40 +540,217 @@ int run_split_tests(void)
     puts("PASS: faults and stop reset MPPT phase and shut PWM off");
     return 0;
 }
-#ifdef TRACE_RUN
-static unsigned int normalize_state(svc_charge_state_t state)
-{
-    return (SVC_CHARGE_STATE_MPPT == state) ? 4U : (unsigned int)state;
-}
-int main(void)
+#else
+int run_standby_tests(void)
 {
     unsigned int i;
+    uint16_t duty;
+    uint32_t starts;
+    uint32_t stops;
     begin_tracking();
-    for(i = 0U; i < 12000U; i++)
+    g_test_battery = 14403U;
+    g_test_current = 1205U;
+    g_test_load = 1047U;
+    tick();
+    duty = g_charge_duty_permille;
+    stops = g_test_stop_count;
+    for(i = 0U; i < 1250U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    assert(1U == g_charge_full_confirmed);
+    assert(1U == g_test_pwm_on && duty == g_charge_duty_permille);
+    assert(stops == g_test_stop_count);
+    g_test_load = 20U;
+    g_test_current = 200U;
+    for(i = 0U; i < 99U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state);
+    assert(0U == g_test_pwm_on && 0U == g_charge_duty_permille);
+    assert(1U == g_charge_full_confirmed);
+    assert(SVC_CHARGE_MAINTENANCE_PHASE_IDLE == g_charge_maintenance_phase);
+    starts = g_test_start_count;
+    g_test_battery = 14090U; /* Below old 14.1 V: must NOT start maintenance. */
+    for(i = 0U; i < 500U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state);
+    assert(starts == g_test_start_count && 0U == g_test_pwm_on);
+    g_test_off_vin = 0U;
+    for(i = 0U; i < 50U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
+    g_test_load = 100U;
+    tick();
+    g_test_load = 20U;
+    tick();
+    assert(0U == g_charge_full_wait_load_ticks);
+    g_test_load = 100U;
+    tick(); tick();
+    assert(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state); /* Input absent. */
+    g_test_off_vin = 18000U;
+    tick();
+    assert(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state);
+    assert(0U == g_charge_full_confirmed && 0U == g_test_pwm_on);
+    tick();
+    assert(SVC_CHARGE_STATE_START_SETTLE == g_charge_state);
+    assert(783U == g_test_initial_duty && 1U == g_test_pwm_on);
+    tick(); tick();
+    assert(SVC_CHARGE_STATE_MPPT == g_charge_state);
+    puts("PASS: loaded full CV stays powered; no-load full standby never runs maintenance,");
+    puts("      absent input waits, load confirmation wakes checked normal startup");
+
+    begin_tracking();
+    enter_charge_wait();
+    g_charge_full_confirmed = 1U;
+    g_test_battery = 13800U;
+    for(i = 0U; i < 499U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state);
+    g_test_battery = 13801U;
+    tick();
+    assert(0U == g_charge_full_wait_recharge_ticks);
+    g_test_battery = 13800U;
+    for(i = 0U; i < 499U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state);
+    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
+    assert(0U == g_charge_full_confirmed);
+    puts("PASS: no-load recharge uses 13.8 V/5 s boundary and continuous confirmation");
+
+    begin_tracking();
+    enter_charge_wait();
+    g_test_measure_status = PLATFORM_ERR_HW;
+    tick();
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_MEASUREMENT == g_charge_fault);
+    begin_tracking();
+    enter_charge_wait();
+    g_test_off_vin = 0U;
+    g_test_temperature = SVC_MEASURE_TEMPERATURE_INVALID;
+    tick();
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_TEMPERATURE_SENSOR == g_charge_fault);
+    begin_tracking();
+    enter_charge_wait();
+    g_test_battery = 14600U;
+    tick();
+    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == g_charge_fault);
+    begin_tracking();
+    enter_charge_wait();
+    svc_charge_process();
+    svc_charge_process(); /* No new sequence: sampling timeout still applies. */
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_SAMPLE_TIMEOUT == g_charge_fault);
+    begin_tracking();
+    enter_charge_wait();
+    g_test_off_vin = 0U;
+    g_test_battery = 14400U;
+    g_test_temperature = 650;
+    for(i = 0U; i < 199U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_FULL_WAIT == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    assert(SVC_CHARGE_FAULT_TEMPERATURE_HIGH == g_charge_fault);
+    begin_tracking();
+    enter_charge_wait();
+    g_test_current = 12000U;
+    /* Stub models measured current only while PWM is on; force a sensor
+     * residual to check the shared standby current guard directly. */
     {
-        unsigned int slot = i % 1600U;
-        g_test_current = slot < 300U ? 2700U : slot < 600U ? 4050U :
-            slot < 900U ? 3950U : 2700U;
-        g_test_battery = slot >= 1000U && slot < 1300U ? 14400U : 13700U;
-        g_test_on_vin = i % 2700U >= 2650U ? 13000U : 18000U;
-        if(1700U == i || 7000U == i) { assert(PLATFORM_ERR_OK == svc_charge_stop()); }
-        if(1750U == i || 7050U == i) { assert(PLATFORM_ERR_OK == svc_charge_start()); }
-        tick();
-        printf("%u,%u,%u,%u,%u,%d,%d,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u\n", i,
-            normalize_state(g_charge_state), g_charge_fault, g_charge_status,
-            g_charge_duty_permille, g_charge_current_error_ma, g_charge_voltage_error_mv,
-            g_charge_duty_high_limited, g_charge_cv_duty_ceiling_permille,
-            g_charge_cv_duty_ceiling_active, g_charge_cv_duty_ceiling_limited,
-            g_test_pwm_on, g_test_start_count, g_test_stop_count, g_test_set_count,
-            g_charge_mppt_power_raw, g_charge_mppt_previous_power_valid,
-            g_charge_mppt_direction_increase, g_charge_mppt_compare_count,
-            g_charge_full_confirm_tick_count);
+        svc_measure_value_t value;
+        svc_charge_fault_t fault;
+        uint8_t fresh;
+        g_test_pwm_on = 1U;
+        g_test_on_vin = 0U;
+        g_test_sequence++;
+        assert(PLATFORM_ERR_HW == get_new_measurement(
+            &value, &fresh, &fault, SVC_CHARGE_SAMPLE_STANDBY));
+        assert(SVC_CHARGE_FAULT_CHARGE_OVERCURRENT == fault);
+        g_test_pwm_on = 0U;
     }
+    begin_tracking();
+    g_test_stop_status = PLATFORM_ERR_HW;
+    enter_charge_wait();
+    assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault);
+    g_test_stop_status = PLATFORM_ERR_OK;
+    tick();
+    assert(0U == g_test_pwm_on);
+    begin_tracking();
+    enter_charge_wait();
+    assert(PLATFORM_ERR_OK == svc_charge_stop());
+    g_test_load = 1000U;
+    g_test_battery = 13700U;
+    for(i = 0U; i < 600U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_OFF == g_charge_state && 0U == g_test_pwm_on);
+    puts("PASS: standby sensor/overvoltage/current/temperature/stale guards,");
+    puts("      OFF failure and manual stop remain protected");
     return 0;
 }
-#else
-int main(void) { return run_split_tests(); }
 #endif
+
+static void run_overvoltage_tests(void)
+{
+    unsigned int i;
+    svc_measure_value_t value = {0};
+    begin_tracking();
+    assert(14400U == svc_charge_config_get()->voltage_target_mv);
+    assert(14600U == svc_charge_config_get()->battery_overvoltage_mv);
+    value.input_voltage_mv = 20000U;
+    value.battery_voltage_mv = 14599U;
+    value.temperature_deci_c = 250;
+    assert(SVC_CHARGE_FAULT_NONE == svc_charge_protection_check_immediate(&value));
+    assert(SVC_CHARGE_FAULT_NONE == svc_charge_protection_check_wake(&value));
+    assert(SVC_CHARGE_FAULT_NONE == svc_charge_protection_check_start_voltage(&value));
+    value.battery_voltage_mv = 14600U;
+    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == svc_charge_protection_check_immediate(&value));
+    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == svc_charge_protection_check_wake(&value));
+    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == svc_charge_protection_check_start_voltage(&value));
+    for(i = 0U; i < 4U; i++)
+    {
+        begin_tracking();
+        if(1U == i) { g_test_current = 4000U; tick(); }
+        if(2U == i) { g_test_battery = 14400U; tick(); }
+        if(3U == i)
+        {
+            enter_charge_wait();
+        }
+        g_test_battery = 14600U;
+        tick();
+        assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+        assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == g_charge_fault);
+        assert(0U == g_test_pwm_on && 0U == g_charge_duty_permille);
+    }
+    value.battery_voltage_mv = 14401U;
+    assert(0U == svc_charge_protection_is_recovery_condition_met(
+        SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE, &value));
+    value.battery_voltage_mv = 14400U;
+    assert(1U == svc_charge_protection_is_recovery_condition_met(
+        SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE, &value));
+    g_test_battery = 14400U;
+    for(i = 0U; i < 499U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state);
+    assert(PLATFORM_ERR_OK == svc_charge_config_init(SVC_CHARGE_BATTERY_SYSTEM_24V));
+    assert(svc_charge_config_get()->voltage_target_mv <
+        svc_charge_config_get()->battery_overvoltage_mv);
+    value.input_voltage_mv = 40000U;
+    value.battery_voltage_mv = svc_charge_config_get()->battery_overvoltage_mv - 1U;
+    assert(SVC_CHARGE_FAULT_NONE == svc_charge_protection_check_immediate(&value));
+    value.battery_voltage_mv = svc_charge_config_get()->battery_overvoltage_mv;
+    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == svc_charge_protection_check_immediate(&value));
+    begin_tracking();
+    puts("PASS: independent 14.6 V OVP boundary across runtime/standby, PWM OFF,");
+    puts("      unchanged 14.4 V CV/recovery +5 s; separate 24 V threshold");
+}
+
+int main(void)
+{
+    run_overvoltage_tests();
+#if SVC_CHARGE_ENABLE_MAINTENANCE
+    return run_split_tests();
+#else
+    return run_standby_tests();
+#endif
+}
 '@
 Push-Location $repoRoot
 try {
@@ -415,37 +759,12 @@ try {
         '02_Service/svc_charge_maintenance.c', '02_Service/svc_charge_protection.c')
     $flags = @('-x','c','-std=c99','-Wall','-Wextra','-Werror',
         '-I02_Service','-I03_Platform/bsp','-I03_Platform/comm','-I03_Platform/mcu_interface')
-    $executable = Join-Path $testDirectory 'split.exe'
-    $source | & $Gcc @flags -o $executable - @common
-    if ($LASTEXITCODE -ne 0) { throw 'State split host compile failed' }
-    & $executable
-    if ($LASTEXITCODE -ne 0) { throw 'State split assertions failed' }
-    if ($BaselineDirectory) {
-        $baselineRoot = (Resolve-Path -LiteralPath $BaselineDirectory).Path
-        $baselineSource = $source.Replace('"svc_charge.c"',
-            '"' + (Join-Path $baselineRoot 'svc_charge.c').Replace('\','/') + '"')
-        $baselineCommon = @('02_Service/svc_charge_config.c',
-            (Join-Path $baselineRoot 'svc_charge_control.c'),
-            (Join-Path $baselineRoot 'svc_charge_maintenance.c'),
-            '02_Service/svc_charge_protection.c')
-        $traces = @()
-        foreach ($version in @('baseline','current')) {
-            $traceSource = if ($version -eq 'baseline') { $baselineSource } else { $source }
-            $traceCommon = if ($version -eq 'baseline') { $baselineCommon } else { $common }
-            $traceExe = Join-Path $testDirectory ($version + '.exe')
-            $traceSource | & $Gcc @flags -DTRACE_RUN -include 02_Service/svc_charge_cc.h `
-                -include 02_Service/svc_charge_cv.h -o $traceExe - @traceCommon
-            if ($LASTEXITCODE -ne 0) { throw "Trace compile failed: $version" }
-            $trace = & $traceExe
-            if ($LASTEXITCODE -ne 0) { throw "Trace run failed: $version" }
-            $traces += ,$trace
-        }
-        for ($i = 0; $i -lt $traces[0].Count; $i++) {
-            if ($traces[0][$i] -cne $traces[1][$i]) {
-                throw "Trace differs at tick ${i}:`nbefore $($traces[0][$i])`nafter  $($traces[1][$i])"
-            }
-        }
-        Write-Output 'PASS: 12000 pre/post split traces match (MPPT state normalized to old 4)'
+    foreach ($maintenanceMode in @(0, 1)) {
+        $executable = Join-Path $testDirectory "split-$maintenanceMode.exe"
+        $source | & $Gcc @flags "-DSVC_CHARGE_ENABLE_MAINTENANCE=$maintenanceMode" -o $executable - @common
+        if ($LASTEXITCODE -ne 0) { throw "State host compile failed, maintenance=$maintenanceMode" }
+        & $executable
+        if ($LASTEXITCODE -ne 0) { throw "State assertions failed, maintenance=$maintenanceMode" }
     }
     Write-Output "Host executables retained at $testDirectory"
 } finally { Pop-Location }

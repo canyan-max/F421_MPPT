@@ -11,7 +11,10 @@
 #include "svc_charge_config.h"
 /* define   -----------------------------------------------------------------*/
 #define SVC_CHARGE_VOLTAGE_12V_TARGET_MV (14400U)
-#define SVC_CHARGE_VOLTAGE_24V_TARGET_MV (29200U)
+#define SVC_CHARGE_VOLTAGE_24V_TARGET_MV (28800U)
+/* Independent battery overvoltage thresholds; 12 V value selected by user. */
+#define SVC_CHARGE_BATTERY_12V_OVERVOLTAGE_MV (14600U)
+#define SVC_CHARGE_BATTERY_24V_OVERVOLTAGE_MV (29200U)
 #define SVC_CHARGE_MAINTENANCE_12V_TARGET_MV (14100U)
 #define SVC_CHARGE_MAINTENANCE_24V_TARGET_MV (28000U)
 #define SVC_CHARGE_MAINTENANCE_12V_RECHARGE_MV (13800U)
@@ -19,7 +22,7 @@
 #define SVC_CHARGE_MAINTENANCE_RECHARGE_DELAY_MS (5000U)
 #define SVC_CHARGE_VOLTAGE_DEADBAND_MV (20U)
 #define SVC_CHARGE_CV_EXIT_MARGIN_MV (100U)
-#define SVC_CHARGE_CURRENT_TARGET_MA (4000U)
+#define SVC_CHARGE_CURRENT_TARGET_MA (10000U)
 #define SVC_CHARGE_CURRENT_LIMIT_MA (12000U)
 #define SVC_CHARGE_CURRENT_DEADBAND_MA (20U)
 #define SVC_CHARGE_DUTY_SCALE (1000U)
@@ -60,6 +63,7 @@ validate_temperature_config(const svc_charge_temperature_config_t *p_config)
 static platform_err_t validate_config(const svc_charge_config_t *p_config)
 {
     if(NULL == p_config || 0U == p_config->voltage_target_mv ||
+       p_config->battery_overvoltage_mv <= p_config->voltage_target_mv ||
        p_config->voltage_deadband_mv >= p_config->cv_exit_margin_mv ||
        p_config->voltage_target_mv <= p_config->cv_exit_margin_mv ||
        0U == p_config->current_target_ma ||
@@ -138,6 +142,10 @@ platform_err_t svc_charge_config_init(svc_charge_battery_system_t system)
                                          system)
                                             ? SVC_CHARGE_VOLTAGE_12V_TARGET_MV
                                             : SVC_CHARGE_VOLTAGE_24V_TARGET_MV;
+    g_charge_config
+        .battery_overvoltage_mv = (SVC_CHARGE_BATTERY_SYSTEM_12V == system)
+                                      ? SVC_CHARGE_BATTERY_12V_OVERVOLTAGE_MV
+                                      : SVC_CHARGE_BATTERY_24V_OVERVOLTAGE_MV;
     g_charge_config.maintenance
         .voltage_target_mv = (SVC_CHARGE_BATTERY_SYSTEM_12V == system)
                                  ? SVC_CHARGE_MAINTENANCE_12V_TARGET_MV

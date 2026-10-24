@@ -50,7 +50,7 @@ void wk_gpio_config(void)
   /* add user code end gpio_config 1 */
 
   /* gpio output config */
-  gpio_bits_reset(GPIOB, BT_VDD_EN_PB10_PIN  | SOL_MOS_OUT_PB12_PIN | LOADMOS_OUT_PB11_PIN); 
+  gpio_bits_reset(GPIOB, BT_VDD_EN_PB10_PIN | LOADMOS_OUT_PB11_PIN | SOL_MOS_OUT_PB12_PIN);
   gpio_bits_reset(RS485_TXEN_PF7_GPIO_PORT, RS485_TXEN_PF7_PIN);
   gpio_bits_set(GPIOB, LED1_PB3_PIN | LED2_PB4_PIN | LED3_PB5_PIN);
 

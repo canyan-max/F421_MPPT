@@ -74,6 +74,9 @@ typedef void (*bsp_measure_error_callback_t)(bsp_measure_error_t error,
  * Persistent identical errors notify once until success or re-registration. */
 void bsp_measure_set_callbacks(bsp_measure_data_callback_t  pf_data,
                                bsp_measure_error_callback_t pf_error);
+/* Main context, 12 V trial only. ISR only turns PWM off; no fault latch or
+ * recovery policy. Zero disables this raw-code check for 24 V configuration. */
+void bsp_measure_fast_ovp_enable(uint8_t enabled);
 /* Startup once after ADC/DMA init and before sampling timer starts. */
 platform_err_t bsp_measure_init(void);
 /* Nonblocking main-context processing of the latest complete raw frame. */

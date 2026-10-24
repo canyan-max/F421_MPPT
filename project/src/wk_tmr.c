@@ -111,6 +111,9 @@ void wk_tmr1_init(void)
   tmr_counter_enable(TMR1, TRUE);
 
   /* add user code begin tmr1_init 2 */
+    /* Retained default OFF even if WorkBench regenerates output enable. */
+    tmr_output_enable(TMR1, FALSE);
+    tmr_counter_enable(TMR1, FALSE);
   /* add user code end tmr1_init 2 */
 }
 
@@ -129,7 +132,7 @@ void wk_tmr15_init(void)
   tmr_brkdt_config_type tmr_brkdt_struct;
 
   /* add user code begin tmr15_init 1 */
-
+    app_startup_before_sampling();
   /* add user code end tmr15_init 1 */
 
   /* configure counter settings */
@@ -137,7 +140,7 @@ void wk_tmr15_init(void)
   tmr_clock_source_div_set(TMR15, TMR_CLOCK_DIV1);
   tmr_repetition_counter_set(TMR15, 0);
   tmr_period_buffer_enable(TMR15, FALSE);
-  tmr_base_init(TMR15, 59999, 1);
+  tmr_base_init(TMR15, 29999, 1);
 
   /* configure primary mode settings */
   tmr_sub_sync_mode_set(TMR15, FALSE);

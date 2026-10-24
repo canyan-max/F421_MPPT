@@ -22,6 +22,13 @@ extern "C"
 #endif // end of __cplusplus
 /* define -------------------------------------------------------------------*/
 #define SVC_CHARGE_PROCESS_PERIOD_MS (10U)
+/* Optional legacy maintenance path; default uses full standby and restart. */
+#ifndef SVC_CHARGE_ENABLE_MAINTENANCE
+#define SVC_CHARGE_ENABLE_MAINTENANCE (0U)
+#endif
+#define SVC_CHARGE_LOAD_ON_MA (100U)
+#define SVC_CHARGE_LOAD_OFF_MA (80U)
+#define SVC_CHARGE_NO_LOAD_CONFIRM_MS (1000U)
 
 /* typedef ------------------------------------------------------------------*/
 typedef enum SVC_CHARGE_BATTERY_SYSTEM_T
@@ -64,6 +71,7 @@ typedef struct SVC_CHARGE_MAINTENANCE_CONFIG_T
 typedef struct SVC_CHARGE_CONFIG_T
 {
     uint32_t                        voltage_target_mv;
+    uint32_t                        battery_overvoltage_mv;
     uint32_t                        voltage_deadband_mv;
     uint32_t                        cv_exit_margin_mv;
     uint32_t                        current_target_ma;

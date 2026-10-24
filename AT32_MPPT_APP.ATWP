@@ -92,7 +92,7 @@
         </Mode>
         <Parameters>
             <ParametersSub name="DividerValue" value="1"/>
-            <ParametersSub name="Period" value="59999"/>
+            <ParametersSub name="Period" value="29999"/>
             <ParametersSub name="OCMode_1" value="TMR_OUTPUT_CONTROL_PWM_MODE_A"/>
             <ParametersSub name="ChannelData_1" value="15000"/>
             <ParametersSub name="OC1Buffer" value="TRUE"/>

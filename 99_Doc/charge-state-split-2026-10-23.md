@@ -1,87 +1,63 @@
-# MPPT / CC / CV状态与模块拆分（2026-10-23）
+# 充电状态与模块说明
 
-## 当前检查点：尚未完成上板验证
+更新时间：2026-10-24。当前为开发试验版，主机验证不等于上板通过。
 
-以下正文记录最初的结构拆分，后续变化以本节及工程memory为准：
+## 默认流程
 
-- MPPT恢复新增REACQUIRE=4，重新建立功率基准并验证邻点方向，不沿用
-  CC/CV接管前的方向；主状态优先级仍为保护、CV、CC、MPPT。
-- FULL_WAIT主状态并入MAINTENANCE=8，数值7空置；充满电池电流窗口
-  为-500～500 mA，连续10 s。12 V CV目标14.4 V，维护目标14.1 V。
-  进入维护先关PWM等待回落，再启动恒压；运行中普通电压偏差由CV调D，
-  不再用目标加20 mV直接停机，避免周期性关断/重新启动。
-- 维护净放电>=200 mA连续5 s请求正常充电，不再要求电池低于13.8 V，
-  不再借输入电压故障退出。运行中保持D重新选择CC/MPPT，CV仍优先；
-  原已停PWM时转WAIT_SAMPLE执行启动检查。真实保护继续独立执行。
-- PB0短路硬件错误，用户要求临时屏蔽：BSP测试旁路保持1；保留用户在
-  EXINT1_0_IRQHandler中注释短路回调分发的改动。恢复时需同时核对这
-  两处，不能只恢复BSP宏。当前版本没有该软件短路关断。
-- 最新MDK编译0 error、0 warning；状态/MPPT趋势/LED主机测试通过。
-  Code22320/RO440/RW276/ZI2588。最新净放电交接未上板测试，不标为
-  完成硬件验收。慢升压收敛、固定CV上限下掉电保护覆盖及50 ms低输出
-  判据与轻载维护冲突仍待处理。
+- 主流程统一处理采样、保护、状态交接和PWM；优先级为保护>CV>CC>MPPT。
+- 启动：有效采样准备完成后，按Vbat/Vin计算初始D，稳定后执行一次启动
+  快速搜索；正常MPPT使用原细步跟踪。CC/CV交回MPPT重新确认搜索方向。
+- CV确认充满只锁存标志，有负载时继续供电。无负载连续确认后，关PWM
+  进入充满待机，继续采样，不调用维护恒压或维护建流。
+- 待机出现负载，或电池达到回充条件，且输入/保护条件允许时，复用正常
+  启动重新计算D。输入缺失时继续等待，不仅因此报告运行输入故障。
 
-## 范围
+| 主状态值 | 含义 |
+| --- | --- |
+| 0 / 1 / 2 | OFF / WAIT_SAMPLE / START_SETTLE |
+| 3 / 4 / 5 / 6 | WAKE_CV / CC / CV / FAULT |
+| 7 | FULL_WAIT，充满待机，PWM关闭 |
+| 8 | MAINTENANCE，仅维护开关开启后使用 |
+| 9 | MPPT |
 
-以7d380ba加启动快速搜索为基础。用户要求三者分开、MPPT有明确状态，
-本轮只拆分模块及交接表达，保留原固定步长CC/CV、P&O及启动5‰搜索。
-没有PI、1 A独立CC、CV确认计时、负载变化触发重扫或新保护阈值。
+## 模块边界
 
-## 主状态与MPPT阶段
+- svc_charge：状态交接、采样/保护调用、PWM输出；停充等待共用一个入口。
+- svc_charge_control：初始D和输入可启动条件。
+- svc_charge_cc、svc_charge_cv、svc_charge_mppt：各自算法，不直接操作PWM。
+- svc_charge_protection：故障条件、确认及恢复；独立电池过压检查覆盖运行。
+- svc_charge_maintenance：复用的充满/负载判断，以及保留的可选维护算法。
+- svc_charge_config：参数及维护接入开关。
 
-g_charge_state：旧0～8值保留，4现在只表示CC，5表示CV，新增9表示MPPT。
-START_SETTLE结束后按电流选择MPPT或CC；CC释放回MPPT；CV退出按当前
-电流选择MPPT或CC。交接不重算启动D、不关PWM，也不跳占空比。
+## 参数与保留维护
 
-g_charge_mppt_phase及svc_charge_mppt_get_phase：
+- 当前12 V CV目标14.4 V，过压14.6 V；24 V目标28.8 V，过压29.2 V。
+  过压达到阈值触发，与CV目标独立；以源码实际配置为准。
+- 负载ON为100 mA、OFF为80 mA，无负载确认1 s；待机负载确认约20 ms。
+  充满电池净电流窗口仍为-500～500 mA/10 s，属于待评估的试验判据。
+- 待机电压回充为13.8 V/27.6 V，连续5 s；当前暂复用maintenance配置。
+- SVC_CHARGE_ENABLE_MAINTENANCE位于svc_charge_config.h，默认0。改1可
+  重新接入原维护状态8；14.1 V维护、BUILD/RUNNING/WAIT及相关保护代码
+  均保留。不能把默认停用误读为维护路径已经通过上板验证。
+- 电流语义、全部保护/恢复参数及待办以.agents/project-memory.md为准。
 
-| 值 | 阶段 | 含义 |
-| --- | --- | --- |
-| 0 | OFF | 初始化、停止或故障后未运行 |
-| 1 | STARTUP | 一次性5‰启动快速搜索 |
-| 2 | TRACKING | 原1‰精细跟踪，包含等待/测量窗口 |
-| 3 | PAUSED | CC/CV接管，禁止继续功率比较 |
+## 验证和限制
 
-CC/CV交回MPPT时，resume在当前实际D丢弃旧比较，重建精细跟踪基准；
-不重新武装快速搜索。只有正常启动显式调用startup_begin。
-旧g_charge_current_limited保留为兼容Watch量，不能再修改它选择算法。
-主状态是控制选择依据；状态发布点由原隐含flag改为显式状态，启动/CV
-退出时即发布下一控制状态，算法执行仍在新采样周期内完成。
-
-## 职责
-
-- svc_charge.c：采样/保护、主状态与交接、统一BSP功率操作。MPPT和CC
-  有独立入口process_mppt/process_constant_current，复用采样、保护及
-  输出处理；CV保留独立流程和入口D上限试验。新鲜采样只消费一次。
-- svc_charge_mppt.c/h：原功率扰动计算、启动快速搜索与显式阶段管理，
-  不写PWM。
-- 新svc_charge_cc.c/h：从svc_charge_control原样搬出的恒流计算。
-- 新svc_charge_cv.c/h：从svc_charge_control原样搬出的恒压/电流约束计算。
-- svc_charge_control.c/h：初始D、输入可用性和共有结果类型。
-- svc_charge_maintenance.c：继续调用同一CV算法，维护策略不变。
-- svc_led.c：把独立MPPT也识别为充电活动状态。
-
-CC/CV函数签名与计算体保留，声明移入各自头文件。模块不互相调度，
-公开接口不引入厂商类型。MDK只新增两个C及其头文件，无硬件配置变化。
-
-## 条件保持
-
-12 V当前配置：3980 mA接管CC，3900 mA释放；14.38 V接管CV，
-14.30 V退出CV。CV仍保留入口D上限、原充满/维护和输入保护行为。
-这些是代码条件，不是新增硬件验收结论；原CV上限保护衔接待办仍保留。
-CC/CV交接先后条件本轮不调优，中途加负载效果还需要上板观察。
-
-## 验证
-
-- CC/CV计算函数与拆分前源码去掉空白后逐字符相同，无计算逻辑变更。
-- 新test-charge-state-split.ps1直接运行真实Service/算法/保护；覆盖
-  MPPT/CC阈值/迟滞、CV优先及退出直接选择CC/MPPT、同D恢复精细跟踪、
-  旧CV上限保留、故障/stop复位MPPT阶段。测量和PWM仅为主机stub。
-- 可选BaselineDirectory对照拆分前保存的三份源文件。12000个混合任务
-  快照中，把新MPPT9映射回旧4后，D、state类别、故障/status、误差、
-  上限量、PWM启停/更新次数、MPPT功率/方向/计数及充满计时相同。
-  不将此有限序列当作所有输入/所有状态时序等价或上板验证。
-- MPPT趋势/启动/阶段、LED全状态（含9）测试通过；git diff --check通过。
-- 新C/H使用项目c-header-template；本次12个C/H按格式脚本处理。
-- Git Bash运行bash ./keil_build_flash.bash -b：0 error、0 warning；
-  Code22372/RO440/RW272/ZI2584，RAM2856 B。未烧录/提交/推送。
+- 按用户要求，12 V DMA帧级快速路径只判断BAT_VOL原值>=1760并调用
+  plat_pwm_outputs_off()关PWM；继续采样，不关闭输入开关，不锁存事件，
+  不增加上层恢复判断。24 V禁用该试验门限，原10 ms软件保护保留。
+- Watch使用g_charge_fast_ovp_trip_raw与g_charge_fast_ovp_off_status；
+  旧复杂结构g_charge_fast_ovp_state已删除。普通主流程后续启动不被该
+  路径互锁；本版仅用于验证原值触发关PWM，过冲/关断延迟待测。
+- 本轮仅MDK编译通过；直接关PWM测试脚本已同步简化，尚未执行。
+- test-charge-state-split.ps1分别构建默认模式和维护模式，覆盖充满带载、
+  待机/维护交接、过压边界、故障和手动停止等行为。
+- test-mppt-trend.ps1验证启动、趋势及恢复方向；test-led.ps1验证指示灯。
+- 本次清理前后两种模式各24000个混合输入快照的状态、D、故障、PWM动作
+  和关键计数一致；仅适用于该输入序列，不证明全部硬件行为等价。
+- 删除了失效的旧BaselineDirectory/TRACE_RUN对照入口；当前脚本只验证
+  当前策略和保留维护路径，不再与已撤销算法比较。
+- 慢升压收敛、CV入口D上限下的掉电保护覆盖、长期满电带载电压以及
+  实际PV/24 V/大电流仍待验证。PB0短路检测仍按用户要求屏蔽。
+- 历史CV事件证据保留于mppt-cv-950-investigation-2026-10-17.md及其图片
+  目录；本说明不再重复历史试验过程或已撤销接口。
