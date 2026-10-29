@@ -28,30 +28,28 @@ typedef enum SVC_CHARGE_SAMPLE_MODE_T
     SVC_CHARGE_SAMPLE_STANDBY,
 } svc_charge_sample_mode_t;
 /* variables ----------------------------------------------------------------*/
-svc_charge_state_t  g_charge_state = SVC_CHARGE_STATE_OFF;
-svc_charge_fault_t  g_charge_fault;
-platform_err_t      g_charge_status;
-uint16_t            g_charge_duty_permille;
-uint32_t            g_charge_last_sequence;
-uint16_t            g_charge_stale_tick_count;
-uint16_t            g_charge_settle_tick_count;
-int32_t             g_charge_current_error_ma;
-int32_t             g_charge_voltage_error_mv;
-uint32_t            g_charge_recovery_tick_count;
-uint8_t             g_charge_recovery_allowed;
-uint8_t             g_charge_recovery_armed;
-svc_measure_value_t g_charge_fault_measure_snapshot;
-svc_charge_state_t  g_charge_fault_state_snapshot;
-uint16_t            g_charge_fault_duty_snapshot;
-uint32_t            g_charge_fault_sequence_snapshot;
-uint8_t             g_charge_fault_snapshot_valid;
-uint8_t             g_charge_duty_high_limited;
+svc_charge_cv_observation_t g_charge_cv_observation;
+svc_charge_state_t          g_charge_state = SVC_CHARGE_STATE_OFF;
+svc_charge_fault_t          g_charge_fault;
+platform_err_t              g_charge_status;
+uint16_t                    g_charge_duty_permille;
+uint16_t                    g_charge_duty_min_reference_permille;
+uint32_t                    g_charge_last_sequence;
+uint16_t                    g_charge_stale_tick_count;
+uint16_t                    g_charge_settle_tick_count;
+int32_t                     g_charge_current_error_ma;
+int32_t                     g_charge_voltage_error_mv;
+uint32_t                    g_charge_recovery_tick_count;
+uint8_t                     g_charge_recovery_allowed;
+uint8_t                     g_charge_recovery_armed;
+svc_measure_value_t         g_charge_fault_measure_snapshot;
+svc_charge_state_t          g_charge_fault_state_snapshot;
+uint16_t                    g_charge_fault_duty_snapshot;
+uint32_t                    g_charge_fault_sequence_snapshot;
+uint8_t                     g_charge_fault_snapshot_valid;
+uint8_t                     g_charge_duty_high_limited;
 /* Compatibility Watch flag, derived from the explicit CC/MPPT state. */
-uint8_t g_charge_current_limited;
-/* Trial: normal CV may recover duty only up to its entry operating point. */
-uint16_t g_charge_cv_duty_ceiling_permille;
-uint8_t  g_charge_cv_duty_ceiling_active;
-uint8_t  g_charge_cv_duty_ceiling_limited;
+uint8_t  g_charge_current_limited;
 uint32_t g_charge_full_wait_load_ticks;
 uint32_t g_charge_full_wait_recharge_ticks;
 /* private  functions  ------------------------------------------------------*/
@@ -76,20 +74,21 @@ static void reset_recovery_runtime(void)
 
 static void reset_control_runtime(void)
 {
-    g_charge_stale_tick_count  = 0U;
-    g_charge_settle_tick_count = 0U;
-    g_charge_current_error_ma  = 0;
-    g_charge_voltage_error_mv  = 0;
-    g_charge_duty_high_limited = 0U;
+    const svc_charge_cv_observation_t observation = {0};
+
+    g_charge_cv_observation              = observation;
+    g_charge_duty_min_reference_permille = 0U;
+    g_charge_stale_tick_count            = 0U;
+    g_charge_settle_tick_count           = 0U;
+    g_charge_current_error_ma            = 0;
+    g_charge_voltage_error_mv            = 0;
+    g_charge_duty_high_limited           = 0U;
     reset_recovery_runtime();
 }
 
 static void reset_mppt_runtime(void)
 {
-    g_charge_current_limited          = 0U;
-    g_charge_cv_duty_ceiling_permille = 0U;
-    g_charge_cv_duty_ceiling_active   = 0U;
-    g_charge_cv_duty_ceiling_limited  = 0U;
+    g_charge_current_limited = 0U;
     svc_charge_mppt_reset();
 }
 
@@ -104,11 +103,9 @@ static void enter_constant_voltage(const svc_measure_value_t *p_value)
     svc_charge_maintenance_reset();
     reset_mppt_runtime();
     svc_charge_mppt_pause(g_charge_duty_permille);
-    g_charge_cv_duty_ceiling_permille = g_charge_duty_permille;
-    g_charge_cv_duty_ceiling_active   = 1U;
-    g_charge_voltage_error_mv         = (int32_t)p_config->voltage_target_mv -
-                                        (int32_t)p_value->battery_voltage_mv;
-    g_charge_state                    = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
+    g_charge_voltage_error_mv = (int32_t)p_config->voltage_target_mv -
+                                (int32_t)p_value->battery_voltage_mv;
+    g_charge_state            = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
 }
 
 /* Select one normal state without changing the applied duty. The CC entry and
@@ -265,6 +262,75 @@ static void enter_fault(svc_charge_fault_t fault, platform_err_t status)
     }
 }
 
+/* Saturate before subtraction; the margin is a trial, not reverse protection.
+ */
+static uint16_t get_cv_duty_min(uint16_t reference_permille)
+{
+    if(reference_permille <= SVC_CHARGE_CV_DUTY_REFERENCE_MARGIN_PERMILLE +
+                                 BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE)
+    {
+        return BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE;
+    }
+    return (uint16_t)(reference_permille -
+                      SVC_CHARGE_CV_DUTY_REFERENCE_MARGIN_PERMILLE);
+}
+
+/* Identify a valid duty rejected only by the unoffset ratio guard.
+ * Callers restrict the running state; startup never uses this exception. */
+static uint8_t is_state_duty_below_reference(const svc_measure_value_t *p_value,
+                                             uint16_t           duty_permille,
+                                             svc_charge_state_t state)
+{
+    if(NULL == p_value)
+    {
+        return 0U;
+    }
+    return (state == g_charge_state && 0U != p_value->battery_voltage_mv &&
+            p_value->input_voltage_mv > p_value->battery_voltage_mv &&
+            BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE <= duty_permille &&
+            BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE >= duty_permille &&
+            duty_permille < g_charge_duty_min_reference_permille)
+               ? 1U
+               : 0U;
+}
+
+static platform_err_t apply_charge_duty(const svc_measure_value_t *p_value,
+                                        uint16_t            duty_permille,
+                                        uint8_t             start,
+                                        svc_charge_fault_t *p_fault)
+{
+    platform_err_t status;
+    if(NULL == p_fault)
+    {
+        return PLATFORM_ERR_PARAM;
+    }
+    *p_fault = SVC_CHARGE_FAULT_NONE;
+    status   = svc_charge_control_check_duty_reference(
+        p_value, duty_permille, &g_charge_duty_min_reference_permille);
+    if(PLATFORM_ERR_OK != status &&
+       !(0U == start &&
+         0U !=
+             is_state_duty_below_reference(p_value, duty_permille,
+                                           SVC_CHARGE_STATE_CONSTANT_VOLTAGE) &&
+         (duty_permille >=
+              get_cv_duty_min(g_charge_duty_min_reference_permille) ||
+          duty_permille > g_charge_duty_permille)) &&
+       !(0U == start && duty_permille > g_charge_duty_permille &&
+         0U != is_state_duty_below_reference(p_value, duty_permille,
+                                             SVC_CHARGE_STATE_MPPT)))
+    {
+        *p_fault = SVC_CHARGE_FAULT_DUTY_LIMIT;
+        return status;
+    }
+    status = (0U != start) ? bsp_power_path_charge_start(duty_permille)
+                           : bsp_power_path_charge_set_duty(duty_permille);
+    if(PLATFORM_ERR_OK != status)
+    {
+        *p_fault = SVC_CHARGE_FAULT_POWER_PATH;
+    }
+    return status;
+}
+
 static platform_err_t get_new_measurement(svc_measure_value_t     *p_value,
                                           uint8_t                 *p_is_new,
                                           svc_charge_fault_t      *p_fault,
@@ -339,6 +405,27 @@ static platform_err_t get_new_measurement(svc_measure_value_t     *p_value,
             *p_fault = fault;
             return PLATFORM_ERR_HW;
         }
+        /* Check even when the controller holds D: falling Vin or rising Vbat
+         * can move the boundary above an unchanged applied duty. MPPT/CV
+         * retain valid applied D in that case; proposals still have guards. */
+        if(0U != g_charge_duty_permille &&
+           SVC_CHARGE_STATE_START_SETTLE != g_charge_state)
+        {
+            status = svc_charge_control_check_duty_reference(
+                p_value, g_charge_duty_permille,
+                &g_charge_duty_min_reference_permille);
+            if(PLATFORM_ERR_OK != status &&
+               0U == is_state_duty_below_reference(
+                         p_value, g_charge_duty_permille,
+                         SVC_CHARGE_STATE_CONSTANT_VOLTAGE) &&
+               0U == is_state_duty_below_reference(p_value,
+                                                   g_charge_duty_permille,
+                                                   SVC_CHARGE_STATE_MPPT))
+            {
+                *p_fault = SVC_CHARGE_FAULT_DUTY_LIMIT;
+                return status;
+            }
+        }
     }
     else
     {
@@ -391,6 +478,14 @@ static void process_wait_sample(void)
         return;
     }
     status = svc_charge_control_calculate_initial_duty(&value, &duty_permille);
+    /* Publish the voltage-matching reference before enabling the power path.
+     * An out-of-range ratio remains observable, without authorizing that PWM.
+     */
+    if(PLATFORM_ERR_OK != svc_charge_control_calculate_duty_reference(
+                              &value, &g_charge_duty_min_reference_permille))
+    {
+        g_charge_duty_min_reference_permille = 0U;
+    }
     if(PLATFORM_ERR_OK != status)
     {
         if(0U == svc_charge_control_is_wake_cv_required(&value))
@@ -414,10 +509,10 @@ static void process_wait_sample(void)
             return;
         }
     }
-    status = bsp_power_path_charge_start(duty_permille);
+    status = apply_charge_duty(&value, duty_permille, 1U, &fault);
     if(PLATFORM_ERR_OK != status)
     {
-        enter_fault(SVC_CHARGE_FAULT_POWER_PATH, status);
+        enter_fault(fault, status);
         return;
     }
     g_charge_duty_permille     = duty_permille;
@@ -464,10 +559,10 @@ static void process_start_settle(void)
         enter_fault(SVC_CHARGE_FAULT_DUTY_LIMIT, status);
         return;
     }
-    status = bsp_power_path_charge_set_duty(duty_permille);
+    status = apply_charge_duty(&value, duty_permille, 0U, &fault);
     if(PLATFORM_ERR_OK != status)
     {
-        enter_fault(SVC_CHARGE_FAULT_POWER_PATH, status);
+        enter_fault(fault, status);
         return;
     }
     g_charge_duty_permille = duty_permille;
@@ -543,10 +638,23 @@ static void process_power_tracking(void)
     {
         return;
     }
-    status = bsp_power_path_charge_set_duty(control_result.duty_permille);
+    if(SVC_CHARGE_STATE_MPPT == g_charge_state &&
+       control_result.duty_permille < g_charge_duty_permille &&
+       PLATFORM_ERR_OK != svc_charge_control_check_duty_reference(
+                              &value, control_result.duty_permille,
+                              &g_charge_duty_min_reference_permille))
+    {
+        /* A downward MPPT proposal cannot cross the live reference, even if
+         * voltage drift already put applied D below it. Hold D/PWM and reset
+         * comparison history for a later upward reacquisition. */
+        svc_charge_mppt_resume(g_charge_duty_permille);
+        return;
+    }
+    status = apply_charge_duty(&value, control_result.duty_permille, 0U,
+                               &fault);
     if(PLATFORM_ERR_OK != status)
     {
-        enter_fault(SVC_CHARGE_FAULT_POWER_PATH, status);
+        enter_fault(fault, status);
         return;
     }
     g_charge_duty_permille = control_result.duty_permille;
@@ -563,6 +671,69 @@ static void process_constant_current(void)
 {
     process_power_tracking();
 }
+static void observe_cv_boundary(const svc_measure_value_t *p_value)
+{
+    const svc_charge_config_t  *p_config    = svc_charge_config_get();
+    svc_charge_cv_observation_t observation = {0};
+    uint64_t                    minimum_input_mv;
+    platform_err_t              status;
+
+    if(NULL == p_value)
+    {
+        g_charge_cv_observation.valid = 0U;
+        return;
+    }
+    status = svc_charge_control_calculate_duty_reference(
+        p_value, &observation.duty_reference_permille);
+    if(PLATFORM_ERR_OK != status)
+    {
+        g_charge_cv_observation.valid = 0U;
+        return;
+    }
+    /* Ceil(Vbat * scale / Dmax) is voltage headroom, not a PV power limit.
+     * Keep this fresh calculation separate from the existing guard's cache. */
+    minimum_input_mv = ((uint64_t)p_value->battery_voltage_mv *
+                            p_config->duty_scale +
+                        BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE - 1U) /
+                       BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE;
+    if(UINT32_MAX < minimum_input_mv)
+    {
+        g_charge_cv_observation.valid = 0U;
+        return;
+    }
+    observation.sequence                = svc_measure_get_sequence();
+    observation.input_voltage_mv        = p_value->input_voltage_mv;
+    observation.battery_voltage_mv      = p_value->battery_voltage_mv;
+    observation.total_output_current_ma = p_value->input_current_ma;
+    observation.input_min_reference_mv  = (uint32_t)minimum_input_mv;
+    observation.duty_permille           = g_charge_duty_permille;
+    observation.duty_min_permille       = get_cv_duty_min(
+        observation.duty_reference_permille);
+    observation.duty_gap_permille = (int32_t)g_charge_duty_permille -
+                                    (int32_t)
+                                        observation.duty_reference_permille;
+    /* Within one existing control step, or already below the reference.
+     * 100 mA is an observation threshold selected by the user, not a trip. */
+    observation.near_reference     = (observation.duty_gap_permille <=
+                                      (int32_t)p_config->control_step_permille)
+                                         ? 1U
+                                         : 0U;
+    observation.low_current        = (SVC_CHARGE_CV_OBSERVE_LOW_CURRENT_MA >=
+                                      p_value->input_current_ma)
+                                         ? 1U
+                                         : 0U;
+    observation.low_power_boundary = (0U != observation.near_reference &&
+                                      0U != observation.low_current)
+                                         ? 1U
+                                         : 0U;
+    observation.input_headroom_low = (p_value->input_voltage_mv <=
+                                      observation.input_min_reference_mv)
+                                         ? 1U
+                                         : 0U;
+    observation.valid              = 1U;
+    g_charge_cv_observation        = observation;
+}
+
 static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
                                      uint32_t            voltage_target_mv,
                                      svc_charge_fault_t *p_fault)
@@ -574,11 +745,10 @@ static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
     {
         return PLATFORM_ERR_PARAM;
     }
-    *p_fault                         = SVC_CHARGE_FAULT_NONE;
-    g_charge_cv_duty_ceiling_limited = 0U;
-    status = svc_charge_control_calculate_cv(p_value, g_charge_duty_permille,
-                                             voltage_target_mv,
-                                             &control_result);
+    *p_fault = SVC_CHARGE_FAULT_NONE;
+    status   = svc_charge_control_calculate_cv(p_value, g_charge_duty_permille,
+                                               voltage_target_mv,
+                                               &control_result);
     g_charge_current_error_ma  = control_result.current_error_ma;
     g_charge_voltage_error_mv  = control_result.voltage_error_mv;
     g_charge_duty_high_limited = control_result.duty_high_limited;
@@ -587,40 +757,29 @@ static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
         *p_fault = SVC_CHARGE_FAULT_DUTY_LIMIT;
         return status;
     }
-    if(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state &&
-       0U != g_charge_cv_duty_ceiling_active)
-    {
-        if(BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE >
-               g_charge_cv_duty_ceiling_permille ||
-           BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE <
-               g_charge_cv_duty_ceiling_permille)
-        {
-            *p_fault = SVC_CHARGE_FAULT_CONFIG;
-            return PLATFORM_ERR_PARAM;
-        }
-        if(control_result.duty_permille > g_charge_cv_duty_ceiling_permille)
-        {
-            control_result.duty_permille = g_charge_cv_duty_ceiling_permille;
-            control_result.duty_changed  = (control_result.duty_permille !=
-                                            g_charge_duty_permille)
-                                               ? 1U
-                                               : 0U;
-            g_charge_cv_duty_ceiling_limited = 1U;
-        }
-        else if(0U != control_result.duty_high_limited &&
-                g_charge_duty_permille == g_charge_cv_duty_ceiling_permille)
-        {
-            g_charge_cv_duty_ceiling_limited = 1U;
-        }
-    }
     if(0U == control_result.duty_changed)
     {
         return PLATFORM_ERR_OK;
     }
-    status = bsp_power_path_charge_set_duty(control_result.duty_permille);
+    if(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state &&
+       control_result.duty_permille < g_charge_duty_permille &&
+       PLATFORM_ERR_OK != svc_charge_control_check_duty_reference(
+                              p_value, control_result.duty_permille,
+                              &g_charge_duty_min_reference_permille) &&
+       0U != is_state_duty_below_reference(p_value,
+                                           control_result.duty_permille,
+                                           SVC_CHARGE_STATE_CONSTANT_VOLTAGE) &&
+       control_result.duty_permille <
+           get_cv_duty_min(g_charge_duty_min_reference_permille))
+    {
+        /* Cancel the downward candidate and retain the applied duty/PWM. */
+        g_charge_cv_observation.downward_blocked = 1U;
+        return PLATFORM_ERR_OK;
+    }
+    status = apply_charge_duty(p_value, control_result.duty_permille, 0U,
+                               p_fault);
     if(PLATFORM_ERR_OK != status)
     {
-        *p_fault = SVC_CHARGE_FAULT_POWER_PATH;
         return status;
     }
     g_charge_duty_permille = control_result.duty_permille;
@@ -703,6 +862,7 @@ static void process_constant_voltage(void)
     {
         return;
     }
+    observe_cv_boundary(&value);
     if((p_config->voltage_target_mv - p_config->cv_exit_margin_mv) >=
        value.battery_voltage_mv)
     {
@@ -741,6 +901,7 @@ static void start_maintenance(const svc_measure_value_t *p_value)
     const svc_charge_config_t *p_config = svc_charge_config_get();
     uint16_t                   duty_permille;
     platform_err_t             status;
+    svc_charge_fault_t         fault;
 
     if(NULL == p_value)
     {
@@ -752,10 +913,10 @@ static void start_maintenance(const svc_measure_value_t *p_value)
     {
         return;
     }
-    status = bsp_power_path_charge_start(duty_permille);
+    status = apply_charge_duty(p_value, duty_permille, 1U, &fault);
     if(PLATFORM_ERR_OK != status)
     {
-        enter_fault(SVC_CHARGE_FAULT_POWER_PATH, status);
+        enter_fault(fault, status);
         return;
     }
     g_charge_duty_permille = duty_permille;
@@ -857,10 +1018,11 @@ static void process_maintenance(void)
     {
         return;
     }
-    status = bsp_power_path_charge_set_duty(control_result.duty_permille);
+    status = apply_charge_duty(&value, control_result.duty_permille, 0U,
+                               &fault);
     if(PLATFORM_ERR_OK != status)
     {
-        enter_fault(SVC_CHARGE_FAULT_POWER_PATH, status);
+        enter_fault(fault, status);
         return;
     }
     g_charge_duty_permille = control_result.duty_permille;
@@ -924,6 +1086,7 @@ static void process_full_wait(void)
 
 static void return_to_wait_sample(void)
 {
+    g_charge_duty_min_reference_permille = 0U;
     svc_charge_protection_reset();
     svc_charge_maintenance_reset();
     reset_mppt_runtime();

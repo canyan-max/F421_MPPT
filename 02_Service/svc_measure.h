@@ -22,7 +22,7 @@ extern "C"
 #endif // end of __cplusplus
 /* define -------------------------------------------------------------------*/
 #define SVC_MEASURE_TEMPERATURE_INVALID (BSP_MEASURE_TEMPERATURE_INVALID)
-#define SVC_MEASURE_READY_FRAME_COUNT (128U)
+#define SVC_MEASURE_READY_FRAME_COUNT (256U)
 
 /* typedef ------------------------------------------------------------------*/
 /* IN_CUR is Buck output current; OUT_CUR is external load current. */

@@ -23,6 +23,8 @@ extern "C"
 {
 #endif // end of __cplusplus
 /* define -------------------------------------------------------------------*/
+#define SVC_CHARGE_CV_OBSERVE_LOW_CURRENT_MA (100U)
+#define SVC_CHARGE_CV_DUTY_REFERENCE_MARGIN_PERMILLE (15U)
 
 /* typedef ------------------------------------------------------------------*/
 typedef enum SVC_CHARGE_STATE_T
@@ -39,7 +41,42 @@ typedef enum SVC_CHARGE_STATE_T
     SVC_CHARGE_STATE_MPPT             = 9U,
 } svc_charge_state_t;
 
+/* Last valid CV measurement and its pre-adjustment duty, main context only.
+ * Diagnostic thresholds do not grant reverse-current protection or alter PWM.
+ */
+typedef struct SVC_CHARGE_CV_OBSERVATION_T
+{
+    uint32_t sequence;
+    uint32_t input_voltage_mv;
+    uint32_t battery_voltage_mv;
+    uint32_t total_output_current_ma;
+    uint32_t input_min_reference_mv;
+    int32_t  duty_gap_permille;
+    uint16_t duty_permille;
+    uint16_t duty_reference_permille;
+    uint16_t duty_min_permille; /* CV reference minus trial margin. */
+    uint8_t  valid;
+    uint8_t  near_reference;
+    uint8_t  low_current;
+    uint8_t  low_power_boundary;
+    uint8_t  input_headroom_low;
+    uint8_t  downward_blocked;
+} svc_charge_cv_observation_t;
+
 /* variables ----------------------------------------------------------------*/
+/* Cached voltage-ratio reference, permille. Acquired at startup; recalculated
+ * on possible cached/live boundary crossing, not on every control tick.
+ * CC keeps its reference guard. MPPT cancels downward crossings, retains
+ * applied D after ratio drift and permits upward recovery below reference.
+ * CV downward steps may reach reference minus its trial margin;
+ * a step below that floor holds applied duty/PWM, not a forced clamp.
+ * Fault retains value; stop/restart clears to zero.
+ * Trial ideal boundary, not measured zero current. 1..950 is encoding range
+ * only; zero output uses PWM shutdown. No fixed 15% charging lower bound.
+ */
+extern uint16_t g_charge_duty_min_reference_permille;
+/* Retained until a new valid CV frame or explicit init/start/stop reset. */
+extern svc_charge_cv_observation_t g_charge_cv_observation;
 /* function  ----------------------------------------------------------------*/
 /* Forces the charge path off and resets the startup state. */
 platform_err_t svc_charge_init(svc_charge_battery_system_t system);

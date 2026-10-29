@@ -22,7 +22,9 @@ extern "C"
 {
 #endif // end of __cplusplus
 /* define -------------------------------------------------------------------*/
-#define BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE (150U)
+/* Nonzero encoding only, not a charging or reverse-current safety threshold.
+ * Service must validate the live voltage-ratio boundary before start/set. */
+#define BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE (1U)
 #define BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE (950U)
 
 /* typedef ------------------------------------------------------------------*/

@@ -27,7 +27,7 @@ static void window(uint32_t current)
     {
         assert(PLATFORM_ERR_OK == svc_charge_mppt_update(
             &g_test_value, g_test_duty, &result));
-        assert(result.duty_permille >= 150U && result.duty_permille <= 950U);
+        assert(result.duty_permille >= BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE && result.duty_permille <= 950U);
         assert((49U == i) == (0U != result.duty_changed));
         g_test_duty = result.duty_permille;
     }
@@ -74,13 +74,13 @@ int main(void)
     g_test_duty += 5U;
     window(1700U);
     assert(17000000U == g_charge_mppt_trend_reference_power_uw);
-    for(i = 150U; i <= 950U; i++)
+    for(i = BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE; i <= 950U; i++)
     {
         for(direction = 0U; direction < 2U; direction++)
         {
             start_test((uint16_t)i, 14000U);
             g_charge_mppt_direction_increase = (uint8_t)direction;
-            expected = (150U == i || (950U != i && 0U != direction))
+            expected = (BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE == i || (950U != i && 0U != direction))
                 ? i + 1U : i - 1U;
             window(2000U);
             assert(expected == g_test_duty);
@@ -90,7 +90,7 @@ int main(void)
     for(i = 0U; i < 2000U; i++) { window(2000U); }
     assert(g_charge_mppt_trend_compare_count < 8U);
     assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(NULL, 800U, &result));
-    assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(&g_test_value, 149U, &result));
+    assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(&g_test_value, 0U, &result));
     assert(PLATFORM_ERR_PARAM == svc_charge_mppt_update(&g_test_value, 951U, &result));
     /* Coarse startup is opt-in; ordinary tests above retain 1 permille. */
     start_test(631U, 12500U);
@@ -134,7 +134,7 @@ int main(void)
     svc_charge_mppt_reset();
     assert(0U == g_charge_mppt_startup_active);
     /* Coarse startup saturates safely at every allowed duty. */
-    for(i = 150U; i <= 950U; i++)
+    for(i = BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE; i <= 950U; i++)
     {
         start_test((uint16_t)i, 12500U);
         svc_charge_mppt_startup_begin();
@@ -183,7 +183,7 @@ int main(void)
     window(2000U); window(2000U); window(2000U); window(2000U);
     assert(800U == g_test_duty); /* Both inconclusive: bounded rollback. */
     assert(SVC_CHARGE_MPPT_PHASE_TRACKING == svc_charge_mppt_get_phase());
-    for(i = 150U; i <= 950U; i++)
+    for(i = BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE; i <= 950U; i++)
     {
         start_test((uint16_t)i, 14000U);
         svc_charge_mppt_resume(g_test_duty);
@@ -209,7 +209,7 @@ int main(void)
     puts("PASS: bounded coarse startup, 5x progress, loss rollback/rebaseline,");
     puts("      10 s bound, CC pause, external duty cancellation, all boundaries");
     puts("PASS: MPPT directions, cumulative threshold, bounded reference, timing,");
-    puts("      pause/rebaseline, all 801 duties both ways, long run, parameters");
+    puts("      pause/rebaseline, all permitted duties both ways, long run, parameters");
     return 0;
 }
 '@

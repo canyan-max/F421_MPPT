@@ -22,6 +22,7 @@ extern "C"
 {
 #endif // end of __cplusplus
 /* define -------------------------------------------------------------------*/
+#define SVC_CHARGE_START_DUTY_OFFSET_PERMILLE (10U)
 
 /* typedef ------------------------------------------------------------------*/
 typedef struct SVC_CHARGE_CONTROL_RESULT_T
@@ -36,6 +37,20 @@ typedef struct SVC_CHARGE_CONTROL_RESULT_T
 /* variables ----------------------------------------------------------------*/
 
 /* function  ----------------------------------------------------------------*/
+/* Rounded Vbat/Vin ratio only; not a guaranteed zero-current boundary and
+ * not clamped to the permitted PWM range. Requires 0 < Vbat < Vin. */
+platform_err_t
+svc_charge_control_calculate_duty_reference(const svc_measure_value_t *p_value,
+                                            uint16_t *p_reference_permille);
+/* Cheap rounded-ratio guard. Recalculate the cached reference only when it
+ * is absent or the applied/requested duty may cross either cached/live bound.
+ * PARAM rejects the duty; it never raises PWM to preserve a lower bound.
+ * Missing battery voltage/reference cannot authorize power output. */
+platform_err_t
+svc_charge_control_check_duty_reference(const svc_measure_value_t *p_value,
+                                        uint16_t  duty_permille,
+                                        uint16_t *p_reference_permille);
+/* Startup ratio plus offset, capped at the permitted PWM maximum. */
 platform_err_t
 svc_charge_control_calculate_initial_duty(const svc_measure_value_t *p_value,
                                           uint16_t *p_duty_permille);
