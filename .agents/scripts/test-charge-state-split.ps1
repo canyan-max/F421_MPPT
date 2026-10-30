@@ -754,7 +754,8 @@ int main(void)
 '@
 Push-Location $repoRoot
 try {
-    $common = @('02_Service/svc_charge_config.c', '02_Service/svc_charge_control.c',
+    $common = @('02_Service/svc_charge_diagnostics.c',
+        '02_Service/svc_charge_config.c', '02_Service/svc_charge_control.c',
         '02_Service/svc_charge_cc.c', '02_Service/svc_charge_cv.c',
         '02_Service/svc_charge_maintenance.c', '02_Service/svc_charge_protection.c')
     $flags = @('-x','c','-std=c99','-Wall','-Wextra','-Werror',

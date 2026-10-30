@@ -23,8 +23,10 @@ extern "C"
 {
 #endif // end of __cplusplus
 /* define -------------------------------------------------------------------*/
-#define SVC_CHARGE_CV_OBSERVE_LOW_CURRENT_MA (100U)
-#define SVC_CHARGE_CV_DUTY_REFERENCE_MARGIN_PERMILLE (15U)
+#define SVC_CHARGE_CV_DUTY_REFERENCE_MARGIN_PERMILLE (0U)
+
+/* First-board-test values; Voc is estimated from PWM-off startup sampling. */
+#define SVC_CHARGE_INPUT_VOC_RATIO_PERMILLE (875U)
 
 /* typedef ------------------------------------------------------------------*/
 typedef enum SVC_CHARGE_STATE_T
@@ -41,42 +43,23 @@ typedef enum SVC_CHARGE_STATE_T
     SVC_CHARGE_STATE_MPPT             = 9U,
 } svc_charge_state_t;
 
-/* Last valid CV measurement and its pre-adjustment duty, main context only.
- * Diagnostic thresholds do not grant reverse-current protection or alter PWM.
- */
-typedef struct SVC_CHARGE_CV_OBSERVATION_T
-{
-    uint32_t sequence;
-    uint32_t input_voltage_mv;
-    uint32_t battery_voltage_mv;
-    uint32_t total_output_current_ma;
-    uint32_t input_min_reference_mv;
-    int32_t  duty_gap_permille;
-    uint16_t duty_permille;
-    uint16_t duty_reference_permille;
-    uint16_t duty_min_permille; /* CV reference minus trial margin. */
-    uint8_t  valid;
-    uint8_t  near_reference;
-    uint8_t  low_current;
-    uint8_t  low_power_boundary;
-    uint8_t  input_headroom_low;
-    uint8_t  downward_blocked;
-} svc_charge_cv_observation_t;
-
 /* variables ----------------------------------------------------------------*/
-/* Cached voltage-ratio reference, permille. Acquired at startup; recalculated
- * on possible cached/live boundary crossing, not on every control tick.
- * CC keeps its reference guard. MPPT cancels downward crossings, retains
- * applied D after ratio drift and permits upward recovery below reference.
- * CV downward steps may reach reference minus its trial margin;
- * a step below that floor holds applied duty/PWM, not a forced clamp.
- * Fault retains value; stop/restart clears to zero.
- * Trial ideal boundary, not measured zero current. 1..950 is encoding range
- * only; zero output uses PWM shutdown. No fixed 15% charging lower bound.
+/* Cached live voltage-ratio lower limit, permille. Running CC/CV/MPPT
+ * normalize both applied duty after voltage drift and outgoing candidates to
+ * this limit. A reference above 950 faults; startup keeps its checked offset.
+ * Fault retains value; stop/restart clears to zero. The ideal ratio is a
+ * software constraint, not a verified reverse-current safety boundary.
  */
 extern uint16_t g_charge_duty_min_reference_permille;
-/* Retained until a new valid CV frame or explicit init/start/stop reset. */
-extern svc_charge_cv_observation_t g_charge_cv_observation;
+/* Startup PWM-off Vin estimate, held until next startup (not verified Voc).
+ * Input reference = estimate * 875/1000; duty max uses live Vbat/reference.
+ * An empty interval faults before any PWM update; recovery re-samples Voc.
+ * range_conflict is retained through fault recovery, cleared at next startup.
+ */
+extern uint32_t g_charge_input_voc_mv;
+extern uint32_t g_charge_input_reference_mv;
+extern uint16_t g_charge_input_duty_max_permille;
+extern uint8_t  g_charge_input_range_conflict;
 /* function  ----------------------------------------------------------------*/
 /* Forces the charge path off and resets the startup state. */
 platform_err_t svc_charge_init(svc_charge_battery_system_t system);
