@@ -339,7 +339,7 @@
               <MiscControls></MiscControls>
               <Define>AT32F421C8T7, USE_STDPERIPH_DRIVER, AT_START_F421_V1</Define>
               <Undefine></Undefine>
-              <IncludePath>..\..\libraries\drivers\inc;..\..\libraries\cmsis\cm4\core_support;..\..\libraries\cmsis\cm4\device_support;..\inc;..\..\00_Project_Config;..\..\03_Platform\comm;..\..\03_Platform\mcu_interface;..\..\03_Platform\bsp;..\..\02_Service;..\..\06_Component\filter</IncludePath>
+              <IncludePath>..\..\libraries\drivers\inc;..\..\libraries\cmsis\cm4\core_support;..\..\libraries\cmsis\cm4\device_support;..\inc;..\..\00_Project_Config;..\..\03_Platform\comm;..\..\03_Platform\mcu_interface;..\..\03_Platform\bsp;..\..\02_Service;..\..\06_Component\filter;..\..\06_Component\Kfifo;..\..\06_Component\Protocols</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -526,8 +526,28 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>Config</GroupName>
+          <Files>
+            <File>
+              <FileName>board_measure_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\00_Project_Config\board_measure_config.h</FilePath>
+            </File>
+            <File>
+              <FileName>board_resources.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\00_Project_Config\board_resources.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>Platform_Impl</GroupName>
           <Files>
+            <File>
+              <FileName>at32f421_uart_adapter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\04_Impl\mcu_at32\at32f421_uart_adapter.c</FilePath>
+            </File>
             <File>
               <FileName>at32f421_gpio_adapter.c</FileName>
               <FileType>1</FileType>
@@ -554,6 +574,26 @@
           <GroupName>Platform_BSP</GroupName>
           <Files>
             <File>
+              <FileName>bsp_uart2.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\03_Platform\bsp\bsp_uart2.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_uart2.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\03_Platform\bsp\bsp_uart2.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_rs485.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\03_Platform\bsp\bsp_rs485.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_rs485.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\03_Platform\bsp\bsp_rs485.h</FilePath>
+            </File>
+            <File>
               <FileName>bsp_led.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\03_Platform\bsp\bsp_led.c</FilePath>
@@ -573,6 +613,16 @@
         <Group>
           <GroupName>Service</GroupName>
           <Files>
+            <File>
+              <FileName>svc_comm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_comm.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_comm.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_comm.h</FilePath>
+            </File>
             <File>
               <FileName>svc_led.c</FileName>
               <FileType>1</FileType>
@@ -722,6 +772,31 @@
               <FileName>filter.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\..\06_Component\filter\filter.h</FilePath>
+            </File>
+            <File>
+              <FileName>kfifo.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\06_Component\Kfifo\kfifo.c</FilePath>
+            </File>
+            <File>
+              <FileName>kfifo.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\06_Component\Kfifo\kfifo.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Component/Protocols</GroupName>
+          <Files>
+            <File>
+              <FileName>proto_hik.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\06_Component\Protocols\proto_hik.c</FilePath>
+            </File>
+            <File>
+              <FileName>proto_hik.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\06_Component\Protocols\proto_hik.h</FilePath>
             </File>
           </Files>
         </Group>

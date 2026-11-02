@@ -99,7 +99,7 @@
   当前已恢复500 us。1760为当前试验门限，不回退到先前1765。
 - 自定义启动装配位于main.c原生user code 0的app_startup_before_sampling，
   由wk_tmr15_init原生tmr15_init 1调用，采样定时器/EXINT使能前完成绑定。
-  TMR1初始化默认输出FALSE，并在原生user区关闭输出及计数器。
+  当前生成的TMR1初始化先使能输出，随后在原生user区关闭输出及计数器。
   再次生成保留行为和上电波形仍需验证，不能恢复生成器删除过的自建标记区。
 - PB0短路硬件信号异常，用户授权临时屏蔽：BSP_DISCHARGE_SHORT_TEST_BYPASS=1，
   project/src/at32f421_int.c中PB0 IRQ分发亦被用户注释。保留两处，不自动恢复。
@@ -149,7 +149,63 @@
 - PB5充电/PB3电池/PB4负载LED低亮；待机7充电灯灭。输出命令不是MOS
   实际电气反馈，充放电启停不互锁。
 
+## 双串口检查点
+
+- 2026-11-02：用户要求提交当前双串口初步可用版本，后续再接其他协议。
+  保留用户最终生成配置：UART2 PA8 TX/PA15 RX（PA2/PA3回到模拟输入），
+  UART1 PB6 TX/PB7 RX，均9600/8N1；包含生成器配置、MDK和kfifo依赖。
+  TMR1生成代码的输出使能保留用户版本，原生user区仍立即关闭输出及计数器；
+  此次不改控制策略，不把初始化期间的电气行为视为已验证。
+
 ## 文档入口
+
+- 2026-11-02新增UART/485底层：adapter按逻辑ID绑定USART1/2且每路独立状态，
+  UART2已接入IRQ/bsp_uart2及同一svc_comm；UART1仍由bsp_rs485管理PF7。
+  用户确认PF7高发送低接收、DE与/RE相连。
+  UART1保持9600/8N1，SysTick 1 ms，5计数差静默断段；kfifo总容量256字节、
+  4段描述，错误/溢出丢损坏段。发送建立改为1计数差（约0～1 ms加调度延迟），
+  待用户复测；原2计数差示波器约2.04 ms。TDC切回接收用户初测波形未见提前释放，
+  不额外增加发送尾部延时，非完整电气验收。接收静默仍为5计数差。
+  main现调用svc_comm，临时回环已移除；只应答HIK的03/0F测量查询。
+  按用户要求精简错误处理：read_segment三参数，返回OK/EMPTY/DROPPED/
+  BUFFER_SMALL/PARAM/ERROR；损坏段直接丢弃，BUFFER_SMALL保留段并返回所需容量。
+  tx_get_result保留IDLE/BUSY/DONE/FAILED；仅TDC+切回接收成功为DONE。
+  删除错误位、通知清除接口和状态快照，只留基本Watch计数。
+  超时中止成功后FAILED，等待5计数差静默可再次提交；GPIO/adapter异常停止通信
+  需复位。中止未确认则保持BUSY保护借用缓冲。初始化只在启动时调用。
+  主机模拟通过：双UART隔离、断段/边界/溢出/错误恢复、TDC与超时后重发；
+  MDK 0 error/0 warning，Code26260/RO448/RW380/ZI3252，未烧录；本次异常路径
+  未上板验证。测试入口见99_Doc/rs485-bringup.md。
+
+- 2026-11-02协议类型整理：06_Component/Protocols/proto_hik.h自行定义
+  proto_hik_battery_t与proto_hik_solar_t，移除telemetry_types.h及comm_*依赖。
+  保留原字段和逐字段组包格式；电压10 mV、电流10 mA、电量10 mAh、温度0.1 K。
+  电池电流为int16_t；温度上限由现有40字节最大应答推导为5项。
+  svc_comm两路上下文各持有RX256/TX40字节缓冲及待发长度，组包使用局部协议
+  结构体；BUSY期间不覆盖本路发送字节，各路独立查询并从原路回复。
+  03接电池电压/净电流（正充负放）/有效NTC温度；0F接输入电压，按用户指定
+  将Buck输出电流input_current_ma填太阳能电流；不代表PV输入电流测量。
+  无来源或未约定映射字段填0；无有效测量不应答，SN/INFO等命令暂不应答。
+  换算电压/电流除10并饱和，温度0.1℃+2731转0.1 K，无效NTC数量为0。
+  MDK编译0 error/0 warning，Code26984/RO448/RW380/ZI3292；未烧录。
+  主机模拟验证映射/缺失字段0/带符号电流/边界饱和/无效温度与校验/发送忙；
+  后续用户已确认两路串口均可通信，见下方初步可用记录。
+- 2026-11-02 UART2接入：用户生成配置最终为PA8 TX/PA15 RX、9600/8N1、优先级0，
+  沿用该配置；UART1优先级2。UART2无需GPIO/建立等待，支持发送期间继续接收。
+  bsp_uart2使用kfifo256字节、4段描述、SysTick5计数差静默，错误/溢出丢损坏段；
+  发送超时count*2+20 ms，中止成功释放缓冲、等待5计数差再发，中止失败保留BUSY。
+  USART1/2原生user区分发adapter，跨两个user区用#if 0屏蔽生成示例避免重复读及
+  不可达警告；wk_usart2的user区关闭中断直到BSP绑定。再生成后核对保留。
+  svc_comm_init初始化两路并返回首个错误，各通道保存init_status独立运行；
+  main Watch为g_comm_init_status，分路看g_comm_channels[0/1].init_status，
+  统计g_rs485_stats/g_uart2_stats。两路目前仅03/0F协议应答，没有调试日志复用。
+  .agents/scripts/test-comm-uarts.ps1模拟真实adapter/BSP/kfifo/Service/协议，验证
+  双路交错发送/应答原路返回/缓冲隔离、UART2全双工接收、溢出/错误恢复、计数回绕、
+  超时中止后重发；通过。MDK0 error/0 warning，Code28452/RO448/RW404/ZI3932，
+  代理未烧录；2026-11-02用户确认UART1（RS485）和UART2（普通串口）均可通信，
+  暂定当前双串口协议版本为“初步可用”基线，先保留现有实现。
+  用户未补充具体测试帧、并发压力或时长；异常注入、长期/双路连续通信、波形及
+  优先级0下采样影响不据此视为已验收。
 
 - 当前充电说明：99_Doc/charge-state-split-2026-10-23.md。
 - 采样换算：99_Doc/bsp_measure.md；分层：99_Doc/architecture.md。

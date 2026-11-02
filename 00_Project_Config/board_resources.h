@@ -2,6 +2,9 @@
 #define BOARD_RESOURCES_H
 #include "plat_resource.h"
 #define BOARD_ADC_MEASURE ((plat_adc_id_t)0U)
+#define BOARD_UART_RS485 ((plat_uart_id_t)0U)
+#define BOARD_UART_DEBUG ((plat_uart_id_t)1U)
+#define BOARD_UART_RESOURCE_NUM (2U)
 #define BOARD_GPIO_LED1 ((plat_gpio_id_t)0U)
 #define BOARD_GPIO_LED2 ((plat_gpio_id_t)1U)
 #define BOARD_GPIO_LED3 ((plat_gpio_id_t)2U)

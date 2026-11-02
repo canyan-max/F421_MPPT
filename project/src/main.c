@@ -42,6 +42,7 @@
 #include "svc_discharge.h"
 #include "svc_led.h"
 #include "bsp_power_path.h"
+#include "svc_comm.h"
 /* add user code end private includes */
 
 /* private typedef -----------------------------------------------------------*/
@@ -68,6 +69,7 @@ static volatile platform_err_t g_discharge_init_status;
 static volatile platform_err_t g_discharge_bind_status;
 static uint32_t                g_discharge_task_last_ms;
 static volatile platform_err_t g_led_status;
+static volatile platform_err_t g_comm_init_status = PLATFORM_ERR_BUSY;
 
 /* add user code end private variables */
 
@@ -79,6 +81,7 @@ static void app_discharge_task_process(void);
 
 /* private user code ---------------------------------------------------------*/
 /* add user code begin 0 */
+
 void app_startup_before_sampling(void)
 {
     /* Called from TMR15's retained init block, before any ADC trigger. */
@@ -184,6 +187,7 @@ int main(void)
   wk_exint_config();
 
   /* add user code begin 2 */
+  g_comm_init_status = svc_comm_init();
   /* Load protection reads PB0 only after its generated EXINT setup. */
   g_discharge_init_status =
       svc_discharge_init(SVC_DISCHARGE_BATTERY_SYSTEM_12V);
@@ -202,6 +206,9 @@ int main(void)
       svc_measure_process();
       app_charge_task_process();
       app_discharge_task_process();
+      /* Each successfully initialized channel runs independently. */
+      svc_comm_process();
+
       /* add user code end 3 */
   }
 }

@@ -202,6 +202,8 @@ void wk_nvic_config(void)
   NVIC_SetPriority(SysTick_IRQn, NVIC_EncodePriority(NVIC_GetPriorityGrouping(), 15, 0));
   nvic_irq_enable(EXINT1_0_IRQn, 0, 0);
   nvic_irq_enable(DMA1_Channel1_IRQn, 1, 0);
+  nvic_irq_enable(USART1_IRQn, 2, 0);
+  nvic_irq_enable(USART2_IRQn, 0, 0);
 }
 
 /* add user code begin 1 */

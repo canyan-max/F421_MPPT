@@ -75,8 +75,18 @@ void wk_usart1_init(void)
 
   usart_hardware_flow_control_set(USART1, USART_HARDWARE_FLOW_NONE);
 
-  /* add user code begin usart1_init 2 */
+  /* enable receive data buffer full interrupt */
+  usart_interrupt_enable(USART1, USART_RDBF_INT, TRUE);
 
+  /* enable error interrupt */
+  usart_interrupt_enable(USART1, USART_ERR_INT, TRUE);
+
+  /* add user code begin usart1_init 2 */
+  /* BSP binds callbacks after generated initialization has completed. */
+  usart_interrupt_enable(USART1, USART_RDBF_INT, FALSE);
+  usart_interrupt_enable(USART1, USART_ERR_INT, FALSE);
+  usart_interrupt_enable(USART1, USART_TDBE_INT, FALSE);
+  usart_interrupt_enable(USART1, USART_TDC_INT, FALSE);
   /* add user code end usart1_init 2 */
   
   usart_enable(USART1, TRUE);
@@ -105,32 +115,43 @@ void wk_usart2_init(void)
   /* add user code end usart2_init 1 */
 
   /* configure the TX pin */
-  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE2, GPIO_MUX_1);
+  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE8, GPIO_MUX_4);
   gpio_init_struct.gpio_drive_strength = GPIO_DRIVE_STRENGTH_MODERATE;
   gpio_init_struct.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
   gpio_init_struct.gpio_mode = GPIO_MODE_MUX;
-  gpio_init_struct.gpio_pins = GPIO_PINS_2;
+  gpio_init_struct.gpio_pins = GPIO_PINS_8;
   gpio_init_struct.gpio_pull = GPIO_PULL_UP;
   gpio_init(GPIOA, &gpio_init_struct);
 
   /* configure the RX pin */
-  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE3, GPIO_MUX_1);
+  gpio_pin_mux_config(GPIOA, GPIO_PINS_SOURCE15, GPIO_MUX_1);
   gpio_init_struct.gpio_drive_strength = GPIO_DRIVE_STRENGTH_MODERATE;
   gpio_init_struct.gpio_out_type = GPIO_OUTPUT_PUSH_PULL;
   gpio_init_struct.gpio_mode = GPIO_MODE_MUX;
-  gpio_init_struct.gpio_pins = GPIO_PINS_3;
+  gpio_init_struct.gpio_pins = GPIO_PINS_15;
   gpio_init_struct.gpio_pull = GPIO_PULL_UP;
   gpio_init(GPIOA, &gpio_init_struct);
 
   /* configure param */
-  usart_init(USART2, 115200, USART_DATA_8BITS, USART_STOP_1_BIT);
+  usart_init(USART2, 9600, USART_DATA_8BITS, USART_STOP_1_BIT);
   usart_transmitter_enable(USART2, TRUE);
   usart_receiver_enable(USART2, TRUE);
   usart_parity_selection_config(USART2, USART_PARITY_NONE);
 
   usart_hardware_flow_control_set(USART2, USART_HARDWARE_FLOW_NONE);
 
+  /* enable receive data buffer full interrupt */
+  usart_interrupt_enable(USART2, USART_RDBF_INT, TRUE);
+
+  /* enable error interrupt */
+  usart_interrupt_enable(USART2, USART_ERR_INT, TRUE);
+
   /* add user code begin usart2_init 2 */
+  /* BSP binds callbacks after generated initialization has completed. */
+  usart_interrupt_enable(USART2, USART_RDBF_INT, FALSE);
+  usart_interrupt_enable(USART2, USART_ERR_INT, FALSE);
+  usart_interrupt_enable(USART2, USART_TDBE_INT, FALSE);
+  usart_interrupt_enable(USART2, USART_TDC_INT, FALSE);
 
   /* add user code end usart2_init 2 */
   

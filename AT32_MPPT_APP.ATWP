@@ -106,14 +106,23 @@
             <ParametersSub name="BaudRate" value="9600"/>
             <ParametersSub name="RealBaudRate" value="9600"/>
         </Parameters>
+        <Interrupts>
+            <InterruptsSub name="Interrupt_RDBF" value="TRUE"/>
+            <InterruptsSub name="Interrupt_ERR" value="TRUE"/>
+        </Interrupts>
     </USART1>
     <USART2>
         <Mode>
             <ModeSub name="Mode" value="Asynchronous"/>
         </Mode>
         <Parameters>
-            <ParametersSub name="RealBaudRate" value="115163"/>
+            <ParametersSub name="BaudRate" value="9600"/>
+            <ParametersSub name="RealBaudRate" value="9600"/>
         </Parameters>
+        <Interrupts>
+            <InterruptsSub name="Interrupt_RDBF" value="TRUE"/>
+            <InterruptsSub name="Interrupt_ERR" value="TRUE"/>
+        </Interrupts>
     </USART2>
     <DMA>
         <ADC1>
@@ -134,8 +143,8 @@
         <TMR1_CH_IRQHandler>0;0;0;0;0;0</TMR1_CH_IRQHandler>
         <TMR15_GLOBAL_IRQHandler>0;0;0;0;0;0</TMR15_GLOBAL_IRQHandler>
         <I2C1_EVT_IRQHandler>0;0;0;0;0;0</I2C1_EVT_IRQHandler>
-        <USART1_IRQHandler>0;0;0;0;0;0</USART1_IRQHandler>
-        <USART2_IRQHandler>0;0;0;0;0;0</USART2_IRQHandler>
+        <USART1_IRQHandler>1;2;0;0;0;1</USART1_IRQHandler>
+        <USART2_IRQHandler>1;0;0;0;0;1</USART2_IRQHandler>
         <I2C1_ERR_IRQHandler>0;0;0;0;0;0</I2C1_ERR_IRQHandler>
     </NVIC>
     <GPIO>
@@ -150,12 +159,6 @@
         </Signal>
         <Signal SignalName="ADC1_IN1" PinName="PA1">
             <Parameters name="Label" value="IN_CUR_PA1"/>
-        </Signal>
-        <Signal SignalName="USART2_TX" PinName="PA2">
-            <Parameters name="GPIO_PullType_Set" value="GPIO_PULL_UP"/>
-        </Signal>
-        <Signal SignalName="USART2_RX" PinName="PA3">
-            <Parameters name="GPIO_PullType_Set" value="GPIO_PULL_UP"/>
         </Signal>
         <Signal SignalName="ADC1_IN4" PinName="PA4">
             <Parameters name="Label" value="BAT_VOL_PA4"/>
@@ -179,8 +182,14 @@
         <Signal SignalName="GPIO_Output" PinName="PB12">
             <Parameters name="Label" value="SOL_MOS_OUT_PB12"/>
         </Signal>
+        <Signal SignalName="USART2_TX" PinName="PA8">
+            <Parameters name="GPIO_PullType_Set" value="GPIO_PULL_UP"/>
+        </Signal>
         <Signal SignalName="GPIO_Output" PinName="PF7">
             <Parameters name="Label" value="RS485_TXEN_PF7"/>
+        </Signal>
+        <Signal SignalName="USART2_RX" PinName="PA15">
+            <Parameters name="GPIO_PullType_Set" value="GPIO_PULL_UP"/>
         </Signal>
         <Signal SignalName="GPIO_Output" PinName="PB3">
             <Parameters name="GPIO_Outputlevel" value="GPIO_OUTPUTLEVEL_HIGH"/>
@@ -232,8 +241,6 @@
         <PinSub pinname="PF1/HEXT_OUT" signalname="I2C1_SCL" signaltype="2"/>
         <PinSub pinname="PA0" signalname="ADC1_IN0" signaltype="3"/>
         <PinSub pinname="PA1" signalname="ADC1_IN1" signaltype="3"/>
-        <PinSub pinname="PA2" signalname="USART2_TX" signaltype="2"/>
-        <PinSub pinname="PA3" signalname="USART2_RX" signaltype="2"/>
         <PinSub pinname="PA4" signalname="ADC1_IN4" signaltype="3"/>
         <PinSub pinname="PA5" signalname="ADC1_IN5" signaltype="3"/>
         <PinSub pinname="PA6" signalname="ADC1_IN6" signaltype="3"/>
@@ -242,10 +249,12 @@
         <PinSub pinname="PB10" signalname="GPIO_Output" signaltype="3"/>
         <PinSub pinname="PB11" signalname="GPIO_Output" signaltype="3"/>
         <PinSub pinname="PB12" signalname="GPIO_Output" signaltype="3"/>
+        <PinSub pinname="PA8" signalname="USART2_TX" signaltype="2"/>
         <PinSub pinname="PA10" signalname="TMR1_CH3" signaltype="3"/>
         <PinSub pinname="PA13" signalname="DEBUG_SWDIO" signaltype="2"/>
         <PinSub pinname="PF7" signalname="GPIO_Output" signaltype="3"/>
         <PinSub pinname="PA14" signalname="DEBUG_SWCLK" signaltype="2"/>
+        <PinSub pinname="PA15" signalname="USART2_RX" signaltype="2"/>
         <PinSub pinname="PB3" signalname="GPIO_Output" signaltype="3"/>
         <PinSub pinname="PB4" signalname="GPIO_Output" signaltype="3"/>
         <PinSub pinname="PB5" signalname="GPIO_Output" signaltype="3"/>
