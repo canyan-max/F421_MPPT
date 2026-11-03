@@ -183,4 +183,42 @@ uint16_t proto_hik_build_sn_ack(uint8_t *p_output, uint16_t capacity)
     return finish_reply(PROTO_HIK_SN_WRITE, 0U, p_output);
 }
 
+uint16_t proto_hik_handle(const uint8_t              *p_request,
+                          uint16_t                    request_length,
+                          const proto_hik_provider_t *p_provider,
+                          uint8_t                    *p_output,
+                          uint16_t                    capacity)
+{
+    uint8_t             command;
+    proto_hik_battery_t battery = {0};
+    proto_hik_solar_t   solar   = {0};
+
+    if(NULL == p_provider || NULL == p_output || 0U == capacity ||
+       PROTO_HIK_READ != proto_hik_parse(p_request, request_length, &command))
+    {
+        return 0U;
+    }
+    switch(command)
+    {
+        case PROTO_HIK_BATTERY:
+            if(capacity < 30U || NULL == p_provider->pf_get_battery ||
+               0U == p_provider->pf_get_battery(&battery))
+            {
+                return 0U;
+            }
+            return proto_hik_build_battery(&battery, p_output, capacity);
+
+        case PROTO_HIK_SOLAR:
+            if(capacity < 12U || NULL == p_provider->pf_get_solar ||
+               0U == p_provider->pf_get_solar(&solar))
+            {
+                return 0U;
+            }
+            return proto_hik_build_solar(&solar, p_output, capacity);
+
+        default:
+            return 0U;
+    }
+}
+
 /* end of file --------------------------------------------------------------*/

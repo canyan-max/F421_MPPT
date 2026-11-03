@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  *@file               :   svc_comm.c
- *@brief              :   Map live measurements to bounded HIK query replies.
+ *@brief              :   Run table-driven communication with per-port storage.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
  ******************************************************************************
@@ -9,157 +9,108 @@
 
 /* includes -----------------------------------------------------------------*/
 #include "svc_comm.h"
-#include "svc_measure.h"
+#include "svc_packdata.h"
 #include "bsp_rs485.h"
 #include "bsp_uart2.h"
-#include "proto_hik.h"
 /* define   -----------------------------------------------------------------*/
-
-#define COMM_CHANNEL_COUNT (2U)
-#define COMM_CHANNEL_RS485 (0U)
-#define COMM_CHANNEL_UART2 (1U)
+/* Increase these bounds when adding protocols with larger segments/replies. */
+#define COMM_RX_CAPACITY (256U)
+#define COMM_TX_CAPACITY (40U)
 
 /* typedef ------------------------------------------------------------------*/
 typedef struct
 {
-    uint8_t        rx_buffer[BSP_RS485_BUFFER_SIZE];
-    uint8_t        tx_buffer[PROTO_HIK_MAX_REPLY];
+    platform_err_t (*pf_init)(void);
+    void (*pf_process)(void);
+    uint8_t (*pf_tx_busy)(void);
+    uint8_t (*pf_read)(uint8_t *p_data, uint16_t capacity, uint16_t *p_count);
+    platform_err_t (*pf_send)(const uint8_t *p_data, uint16_t count);
+} comm_port_t;
+
+typedef struct
+{
+    uint8_t        rx_buffer[COMM_RX_CAPACITY];
+    uint8_t        tx_buffer[COMM_TX_CAPACITY];
     uint16_t       tx_length;
     platform_err_t init_status;
 } comm_channel_t;
 
+static uint8_t rs485_tx_busy(void);
+static uint8_t uart2_tx_busy(void);
+static uint8_t
+rs485_read(uint8_t *p_data, uint16_t capacity, uint16_t *p_count);
+static uint8_t
+uart2_read(uint8_t *p_data, uint16_t capacity, uint16_t *p_count);
+
 /* variables ----------------------------------------------------------------*/
+/* Table index is the service channel ID: 0=UART1/RS485, 1=UART2. */
+static const comm_port_t g_comm_ports[] = {
+    {bsp_rs485_init, bsp_rs485_process, rs485_tx_busy, rs485_read,
+     bsp_rs485_send_async},
+    {bsp_uart2_init, bsp_uart2_process, uart2_tx_busy, uart2_read,
+     bsp_uart2_send_async},
+};
 
 /* Each UART owns its encoded reply until TDC or confirmed abort. */
-static comm_channel_t g_comm_channels[COMM_CHANNEL_COUNT];
-static uint8_t        g_initialized;
+static comm_channel_t
+               g_comm_channels[sizeof(g_comm_ports) / sizeof(g_comm_ports[0U])];
+static uint8_t g_initialized;
 
 /* private  functions  ------------------------------------------------------*/
-
-/* Saturate before narrowing; all protocol currents/voltages use 10-unit steps.
- */
-static uint16_t to_u16_units(uint32_t value)
+/* Normalize distinct BSP enums without incompatible function-pointer casts. */
+static uint8_t rs485_tx_busy(void)
 {
-    value /= 10U;
-    return value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
+    return BSP_RS485_TX_BUSY == bsp_rs485_tx_get_result();
 }
 
-static uint16_t
-build_reply(uint8_t command, uint8_t *p_output, uint16_t capacity)
+static uint8_t uart2_tx_busy(void)
 {
-    svc_measure_value_t value;
-    int32_t             converted;
-    proto_hik_battery_t battery = {0};
-    proto_hik_solar_t   solar   = {0};
-
-    if(PROTO_HIK_BATTERY != command && PROTO_HIK_SOLAR != command)
-    {
-        return 0U;
-    }
-    if(PLATFORM_ERR_OK != svc_measure_get(&value))
-    {
-        /* Do not report zero-filled measurements as a successful sample. */
-        return 0U;
-    }
-    if(PROTO_HIK_SOLAR == command)
-    {
-        solar.voltage_10mv = to_u16_units(value.input_voltage_mv);
-        /* User-selected compatibility mapping: Buck output, not PV current. */
-        solar.current_10ma = to_u16_units(value.input_current_ma);
-        return proto_hik_build_solar(&solar, p_output, capacity);
-    }
-    battery.voltage_10mv = to_u16_units(value.battery_voltage_mv);
-    converted            = value.battery_current_ma / 10;
-    if(converted > INT16_MAX)
-    {
-        converted = INT16_MAX;
-    }
-    else if(converted < INT16_MIN)
-    {
-        converted = INT16_MIN;
-    }
-    battery.current_10ma = (int16_t)converted;
-    if(SVC_MEASURE_TEMPERATURE_INVALID != value.temperature_deci_c)
-    {
-        converted = (int32_t)value.temperature_deci_c + 2731;
-        if(converted >= 0)
-        {
-            /* Legacy temperature unit is 0.1 K; truncate 273.15 K offset. */
-            battery.ntc_count                   = 1U;
-            battery.temperature_deci_kelvin[0U] = (uint16_t)converted;
-        }
-    }
-    /* Fields without an agreed source/mapping remain zero. */
-    return proto_hik_build_battery(&battery, p_output, capacity);
+    return BSP_UART2_TX_BUSY == bsp_uart2_tx_get_result();
 }
 
-static void process_channel(uint8_t channel)
+static uint8_t rs485_read(uint8_t *p_data, uint16_t capacity, uint16_t *p_count)
 {
-    comm_channel_t *p_channel = &g_comm_channels[channel];
-    uint16_t        count;
-    uint8_t         command;
-    uint8_t         received;
-    platform_err_t  status;
+    return BSP_RS485_RX_OK == bsp_rs485_read_segment(p_data, capacity, p_count);
+}
+
+static uint8_t uart2_read(uint8_t *p_data, uint16_t capacity, uint16_t *p_count)
+{
+    return BSP_UART2_RX_OK == bsp_uart2_read_segment(p_data, capacity, p_count);
+}
+
+static void process_channel(size_t channel)
+{
+    comm_channel_t    *p_channel = &g_comm_channels[channel];
+    const comm_port_t *p_port    = &g_comm_ports[channel];
+    uint16_t           count     = 0U;
+    platform_err_t     status;
 
     if(PLATFORM_ERR_OK != p_channel->init_status)
     {
         return;
     }
-    if(COMM_CHANNEL_RS485 == channel)
+    p_port->pf_process();
+    if(0U != p_port->pf_tx_busy())
     {
-        bsp_rs485_process();
-        if(BSP_RS485_TX_BUSY == bsp_rs485_tx_get_result())
-        {
-            return;
-        }
-    }
-    else
-    {
-        bsp_uart2_process();
-        if(BSP_UART2_TX_BUSY == bsp_uart2_tx_get_result())
-        {
-            return;
-        }
+        return;
     }
     if(0U == p_channel->tx_length)
     {
-        if(COMM_CHANNEL_RS485 == channel)
-        {
-            received = BSP_RS485_RX_OK ==
-                       bsp_rs485_read_segment(p_channel->rx_buffer,
-                                              sizeof(p_channel->rx_buffer),
-                                              &count);
-        }
-        else
-        {
-            received = BSP_UART2_RX_OK ==
-                       bsp_uart2_read_segment(p_channel->rx_buffer,
-                                              sizeof(p_channel->rx_buffer),
-                                              &count);
-        }
-        if(0U == received ||
-           PROTO_HIK_READ !=
-               proto_hik_parse(p_channel->rx_buffer, count, &command))
+        if(0U == p_port->pf_read(p_channel->rx_buffer,
+                                 sizeof(p_channel->rx_buffer), &count))
         {
             return;
         }
-        p_channel->tx_length = build_reply(command, p_channel->tx_buffer,
-                                           sizeof(p_channel->tx_buffer));
+        p_channel->tx_length = svc_packdata_handle(p_channel->rx_buffer, count,
+                                                   p_channel->tx_buffer,
+                                                   sizeof(
+                                                       p_channel->tx_buffer));
         if(0U == p_channel->tx_length)
         {
             return;
         }
     }
-    if(COMM_CHANNEL_RS485 == channel)
-    {
-        status = bsp_rs485_send_async(p_channel->tx_buffer,
-                                      p_channel->tx_length);
-    }
-    else
-    {
-        status = bsp_uart2_send_async(p_channel->tx_buffer,
-                                      p_channel->tx_length);
-    }
+    status = p_port->pf_send(p_channel->tx_buffer, p_channel->tx_length);
     if(PLATFORM_ERR_BUSY != status)
     {
         /* Accepted sends are never replayed automatically after a failure. */
@@ -170,29 +121,37 @@ static void process_channel(uint8_t channel)
 /* exported functions -------------------------------------------------------*/
 platform_err_t svc_comm_init(void)
 {
+    size_t         channel;
+    platform_err_t first_error = PLATFORM_ERR_OK;
+
     if(0U != g_initialized)
     {
         return PLATFORM_ERR_BUSY;
     }
-    g_initialized                                   = 1U;
-    g_comm_channels[COMM_CHANNEL_RS485].init_status = bsp_rs485_init();
-    g_comm_channels[COMM_CHANNEL_UART2].init_status = bsp_uart2_init();
-    if(PLATFORM_ERR_OK != g_comm_channels[COMM_CHANNEL_RS485].init_status)
+    g_initialized = 1U;
+    for(channel = 0U; channel < sizeof(g_comm_ports) / sizeof(g_comm_ports[0U]);
+        channel++)
     {
-        return g_comm_channels[COMM_CHANNEL_RS485].init_status;
+        g_comm_channels[channel].init_status = g_comm_ports[channel].pf_init();
+        if(PLATFORM_ERR_OK == first_error &&
+           PLATFORM_ERR_OK != g_comm_channels[channel].init_status)
+        {
+            first_error = g_comm_channels[channel].init_status;
+        }
     }
-    return g_comm_channels[COMM_CHANNEL_UART2].init_status;
+    return first_error;
 }
 
 void svc_comm_process(void)
 {
-    uint8_t channel;
+    size_t channel;
 
     if(0U == g_initialized)
     {
         return;
     }
-    for(channel = 0U; channel < COMM_CHANNEL_COUNT; channel++)
+    for(channel = 0U; channel < sizeof(g_comm_ports) / sizeof(g_comm_ports[0U]);
+        channel++)
     {
         process_channel(channel);
     }

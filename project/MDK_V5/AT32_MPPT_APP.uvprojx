@@ -614,6 +614,16 @@
           <GroupName>Service</GroupName>
           <Files>
             <File>
+              <FileName>svc_packdata.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\02_Service\svc_packdata.c</FilePath>
+            </File>
+            <File>
+              <FileName>svc_packdata.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\02_Service\svc_packdata.h</FilePath>
+            </File>
+            <File>
               <FileName>svc_comm.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\02_Service\svc_comm.c</FilePath>
@@ -788,6 +798,16 @@
         <Group>
           <GroupName>Component/Protocols</GroupName>
           <Files>
+            <File>
+              <FileName>proto_local.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\06_Component\Protocols\proto_local.c</FilePath>
+            </File>
+            <File>
+              <FileName>proto_local.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\..\06_Component\Protocols\proto_local.h</FilePath>
+            </File>
             <File>
               <FileName>proto_hik.c</FileName>
               <FileType>1</FileType>

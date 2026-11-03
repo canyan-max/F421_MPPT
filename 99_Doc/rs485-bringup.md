@@ -8,11 +8,23 @@
 ## 当前协议接入
 
 main启动调用svc_comm_init，循环调用svc_comm_process；Service负责推进BSP、
-取段、解析查询、读取测量快照、组包并异步发送。每轮每路最多取一段。
+取段、调用svc_packdata_handle并异步发送。每轮每路最多取一段。
+svc_comm遍历g_comm_ports通道表，表索引0/1分别代表UART1/RS485、UART2；
+各路上下文数量由表长推导，初始化失败不阻止其他成功通道运行。
 两路各有RX256/TX40字节缓冲和待发长度，协议结构体为局部变量；本路BUSY期间
 不覆盖发送缓冲，一路发送不会阻挡另一路组包。应答仅从收到查询的端口返回。
 UART1走bsp_rs485；UART2走bsp_uart2，无GPIO或发送建立延时，发送期间仍接收。
 未接受的BUSY提交保留应答到后续循环；已接受的发送不自动重发。
+
+协议与项目通过数据提供回调连接：
+
+- proto_hik_provider_t定义pf_get_battery/pf_get_solar；返回1表示有数据，0不应答。
+- svc_packdata的get_hik_battery/get_hik_solar负责本项目取数、单位换算和字段映射；
+  只读g_hik_provider在每次调用proto_hik_handle时传入，没有协议全局注册。
+- proto_hik_handle负责校验、命令分发和组包，先清零局部协议结构体再调用回调；
+  回调不能保留结构体指针。缺失回调、无数据或输出容量不足均返回应答长度0。
+- proto_hik.c/h留在06_Component，不包含Service/BSP头文件。换项目只替换provider。
+  INFO/SN仍未接入，不改变已有应答范围。
 
 | 查询 | 字段来源 |
 | --- | --- |
@@ -44,7 +56,10 @@ g_comm_channels[0].init_status（UART1）、g_comm_channels[1].init_status（UAR
 以及g_rs485_stats/g_uart2_stats。main始终调用Service，初始化成功的通道独立运行。
 旧echo_*和g_rs485_init_status变量已移除。
 
-MDK编译0 error/0 warning：Code28452/RO448/RW404/ZI3932；未烧录。
+最新表驱动整理MDK编译0 error/0 warning：Code28748/RO504/RW404/ZI3932；未烧录。
+双UART主机回归通过：原路回复/独立TX缓冲、UART2全双工、非法帧与未知ID、
+空参数/容量边界/无数据不应答、发送BUSY保留原应答及异常恢复。本次未上板复测。
+此前仅协议文件独立GCC编译/测试也通过；协议仍无项目依赖。
 主机模拟已验证映射、零字段、带符号电流、饱和边界、无效温度/校验及发送忙。
 .agents/scripts/test-comm-uarts.ps1使用真实adapter/BSP/kfifo/Service/协议配合模拟硬件，
 通过双路交错查询/原路应答/发送缓冲隔离、UART2发送期间接收、段溢出/接收错误、
@@ -54,6 +69,26 @@ UART2沿用优先级0，本次没有测量其最坏中断耗时和对采样的�
 USART1/2均在user区分发adapter，并用跨user区的#if 0屏蔽生成示例，避免重复读取；
 生成初始化完成后由BSP绑定再启用RX/错误中断，再生成后核对这些保留区。
 
+## 后续增加协议
+
+svc_packdata.c的g_protocols是协议ID表，现有`0xDD -> HIK`与`0x15 -> 本机Modbus RTU`。
+本机协议支持03读取；06当前无可写项并返回异常02，详情见local_communication.md。
+svc_packdata_handle遍历表，匹配请求首字节后调用该协议的统一签名入口；
+该入口将本项目provider传给独立协议模块。匹配后即由该协议处理，校验失败、
+命令不支持或无数据时直接不应答，不再把同一段交给其他协议。
+
+增加协议时：
+
+1. 将可移植协议模块放到06_Component/Protocols，并接入工程。
+2. 在svc_packdata.c增加本项目数据回调、调用该协议的入口和g_protocols表项。
+3. 核对请求/应答最大长度；当前comm每路RX256/TX40，较大协议需调整容量，
+   同时不能超过BSP当前收发能力。
+
+协议单位和数据类型各自独立，不强制共用一份测量结构体；不用每协议建Service。
+只增加协议不修改svc_comm流程。若协议共用首字节，需扩展packdata匹配规则，
+不能在表中登记重复前缀。当前仍按BSP静默段处理，一段包含多帧时不自动拆帧。
+若增加物理通道，在comm中增加BSP归一化函数和通道表项，公共流程保持不变；
+新通道的硬件初始化、IRQ和SysTick装配仍需另行接入。
 ## 以下为早期底层回环验证记录
 
 以下回环开关、echo_* Watch变量和main装配描述属于此前版本，现由上述Service替换。

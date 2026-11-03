@@ -59,6 +59,17 @@ typedef struct PROTO_HIK_SOLAR_T
     uint16_t current_10ma;
 } proto_hik_solar_t;
 
+/* Synchronous data providers, invoked only for a valid supported query.
+ * Return 1 on success, 0 when data is unavailable. The protocol zeroes the
+ * local structure before calling; fill agreed fields in protocol units.
+ * The pointer is valid only during the call and must not be retained.
+ * Providers run in the caller's context and must be bounded/nonblocking. */
+typedef struct PROTO_HIK_PROVIDER_T
+{
+    uint8_t (*pf_get_battery)(proto_hik_battery_t *p_data);
+    uint8_t (*pf_get_solar)(proto_hik_solar_t *p_data);
+} proto_hik_provider_t;
+
 typedef enum PROTO_HIK_RESULT_T
 {
     PROTO_HIK_NOT_HIK = 0U,
@@ -77,6 +88,17 @@ typedef enum PROTO_HIK_RESULT_T
 uint16_t proto_hik_checksum(const uint8_t *p_data, uint16_t length);
 proto_hik_result_t
 proto_hik_parse(const uint8_t *p_data, uint16_t length, uint8_t *p_command);
+/* Handles battery/solar reads with caller-supplied data providers.
+ * Returns encoded length, or 0 for invalid/unsupported queries, missing or
+ * failed providers, invalid data, or insufficient output capacity.
+ * No global binding, storage, serial IO, or project dependencies.
+ * Provider/output are borrowed only during this call; the caller owns the
+ * reply buffer for any subsequent asynchronous send. INFO/SN not handled. */
+uint16_t proto_hik_handle(const uint8_t              *p_request,
+                          uint16_t                    request_length,
+                          const proto_hik_provider_t *p_provider,
+                          uint8_t                    *p_output,
+                          uint16_t                    capacity);
 uint16_t proto_hik_build_battery(const proto_hik_battery_t *p_data,
                                  uint8_t                   *p_output,
                                  uint16_t                   capacity);

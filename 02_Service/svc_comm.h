@@ -1,7 +1,7 @@
 /**
  ******************************************************************************
  *@file               :   svc_comm.h
- *@brief              :   Serve HIK measurement queries over UART1 and UART2.
+ *@brief              :   Run communication flow over configured UART channels.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
  ******************************************************************************
@@ -32,8 +32,8 @@ extern "C"
  * Watch g_comm_channels[0/1].init_status for UART1/UART2 respectively. */
 platform_err_t svc_comm_init(void);
 /* Main loop, nonblocking. Owns each BSP receive consumer and separate per-port
- * TX buffers. Supports battery (03) and solar (0F) reads; other commands are
- * ignored. */
+ * TX buffers. Protocol selection/data binding live in svc_packdata; unknown
+ * queries are ignored. */
 void svc_comm_process(void);
 
 #ifdef __cplusplus
