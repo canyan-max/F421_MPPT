@@ -19,7 +19,6 @@
 svc_charge_cv_observation_t g_charge_cv_observation;
 int32_t                     g_charge_current_error_ma;
 int32_t                     g_charge_voltage_error_mv;
-uint8_t                     g_charge_input_limited;
 uint8_t                     g_charge_current_limited;
 svc_measure_value_t         g_charge_fault_measure_snapshot;
 svc_charge_state_t          g_charge_fault_state_snapshot;
@@ -43,7 +42,6 @@ void svc_charge_diagnostics_reset(void) {
     g_charge_cv_observation   = observation;
     g_charge_current_error_ma = 0;
     g_charge_voltage_error_mv = 0;
-    g_charge_input_limited    = 0U;
 }
 
 void svc_charge_diagnostics_capture_fault(svc_charge_state_t state, uint16_t duty_permille) {
@@ -70,14 +68,14 @@ void svc_charge_diagnostics_observe_cv(const svc_measure_value_t *p_value, uint1
         g_charge_cv_observation.valid = 0U;
         return;
     }
-    status = svc_charge_control_calculate_duty_reference(p_value,
+    status = svc_charge_control_calculate_duty_reference(p_value, g_charge_input_voc_mv,
                                                          &observation.duty_reference_permille);
     if (PLATFORM_ERR_OK != status) {
         g_charge_cv_observation.valid = 0U;
         return;
     }
     /* Ceil(Vbat * scale / Dmax) is voltage headroom, not a PV power limit.
-     * Keep this fresh calculation separate from the existing guard's cache. */
+     * This headroom observation still uses the actual input measurement. */
     minimum_input_mv = ((uint64_t)p_value->battery_voltage_mv * p_config->duty_scale +
                         BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE - 1U) /
                        BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE;

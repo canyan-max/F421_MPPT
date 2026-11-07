@@ -26,6 +26,7 @@ extern "C" {
 
 /* First-board-test values; Voc is estimated from PWM-off startup sampling. */
 #define SVC_CHARGE_INPUT_VOC_RATIO_PERMILLE (875U)
+#define SVC_CHARGE_CV_INPUT_RECOVER_HYSTERESIS_MV (200U)
 
 /* typedef ---------------------------------------------------------------------------------------*/
 typedef enum SVC_CHARGE_STATE_T {
@@ -42,7 +43,8 @@ typedef enum SVC_CHARGE_STATE_T {
 } svc_charge_state_t;
 
 /* variables -------------------------------------------------------------------------------------*/
-/* Cached live voltage-ratio lower limit, permille. Running CC/CV/MPPT
+/* Rounded current Vbat / saved startup Voc lower limit, permille.
+ * A theoretical reverse-voltage equilibrium reference only. CC/CV/MPPT
  * normalize both applied duty after voltage drift and outgoing candidates to
  * this limit. A reference above 950 faults; startup keeps its checked offset.
  * Fault retains value; stop/restart clears to zero. The ideal ratio is a
@@ -50,14 +52,18 @@ typedef enum SVC_CHARGE_STATE_T {
  */
 extern uint16_t g_charge_duty_min_reference_permille;
 /* Startup PWM-off Vin estimate, held until next startup (not verified Voc).
- * Input reference = estimate * 875/1000; duty max uses live Vbat/reference.
+ * Input reference = estimate * 875/1000, used only for CV input regulation.
  * An empty interval faults before any PWM update; recovery re-samples Voc.
  * range_conflict is retained through fault recovery, cleared at next startup.
  */
 extern uint32_t g_charge_input_voc_mv;
 extern uint32_t g_charge_input_reference_mv;
+/* Compatibility Watch name: actual fixed upper limit, now 950 while running. */
 extern uint16_t g_charge_input_duty_max_permille;
 extern uint8_t  g_charge_input_range_conflict;
+/* CV input constraint latch: below reference reduces D; recovery band holds;
+ * reference + trial hysteresis releases. Not a main state or fault flag. */
+extern uint8_t g_charge_input_limited;
 /* function  -------------------------------------------------------------------------------------*/
 /* Forces the charge path off and resets the startup state. */
 platform_err_t svc_charge_init(svc_charge_battery_system_t system);

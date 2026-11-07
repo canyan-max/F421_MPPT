@@ -20,18 +20,19 @@
 /* private  functions  ---------------------------------------------------------------------------*/
 /* exported functions ----------------------------------------------------------------------------*/
 platform_err_t svc_charge_control_calculate_duty_reference(const svc_measure_value_t *p_value,
+                                                           uint32_t  reference_voltage_mv,
                                                            uint16_t *p_duty_permille) {
-    const svc_charge_config_t *p_config = svc_charge_config_get();
-    uint64_t                   duty_numerator;
-    uint64_t                   duty_permille;
+    const svc_charge_config_t *p_config       = svc_charge_config_get();
+    uint64_t                   duty_numerator = 0U;
+    uint64_t                   duty_permille  = 0U;
 
     if (NULL == p_value || NULL == p_duty_permille || 0U == p_value->battery_voltage_mv ||
-        p_value->input_voltage_mv <= p_value->battery_voltage_mv) {
+        reference_voltage_mv <= p_value->battery_voltage_mv) {
         return PLATFORM_ERR_PARAM;
     }
     duty_numerator = (uint64_t)p_value->battery_voltage_mv * p_config->duty_scale +
-                     p_value->input_voltage_mv / 2U;
-    duty_permille  = duty_numerator / p_value->input_voltage_mv;
+                     reference_voltage_mv / 2U;
+    duty_permille  = duty_numerator / reference_voltage_mv;
     if (UINT16_MAX < duty_permille) {
         return PLATFORM_ERR_PARAM;
     }
@@ -40,11 +41,10 @@ platform_err_t svc_charge_control_calculate_duty_reference(const svc_measure_val
 }
 
 platform_err_t svc_charge_control_check_duty_reference(const svc_measure_value_t *p_value,
-                                                       uint16_t                   duty_permille,
+                                                       uint32_t  reference_voltage_mv,
+                                                       uint16_t  duty_permille,
                                                        uint16_t *p_reference_permille) {
-    const svc_charge_config_t *p_config = svc_charge_config_get();
-    platform_err_t             status;
-    uint64_t                   voltage_ratio_numerator;
+    platform_err_t status = PLATFORM_ERR_OK;
     if (NULL == p_value || NULL == p_reference_permille || 0U == p_value->input_voltage_mv ||
         0U == p_value->battery_voltage_mv ||
         p_value->input_voltage_mv <= p_value->battery_voltage_mv ||
@@ -52,17 +52,12 @@ platform_err_t svc_charge_control_check_duty_reference(const svc_measure_value_t
         BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE < duty_permille) {
         return PLATFORM_ERR_PARAM;
     }
-    voltage_ratio_numerator = (uint64_t)p_value->battery_voltage_mv * p_config->duty_scale +
-                              p_value->input_voltage_mv / 2U;
-    /* Equivalent to duty < round(Vbat/Vin*scale), without dividing each tick.
-     * Equality is allowed, matching the existing rounded startup duty. */
-    if (0U == *p_reference_permille || duty_permille < *p_reference_permille ||
-        ((uint64_t)duty_permille + 1U) * p_value->input_voltage_mv <= voltage_ratio_numerator) {
-        status = svc_charge_control_calculate_duty_reference(p_value, p_reference_permille);
-        if (PLATFORM_ERR_OK != status) {
-            *p_reference_permille = 0U;
-            return status;
-        }
+    /* Reuse the explicit voltage reference, never substitute loaded Vin. */
+    status = svc_charge_control_calculate_duty_reference(p_value, reference_voltage_mv,
+                                                         p_reference_permille);
+    if (PLATFORM_ERR_OK != status) {
+        *p_reference_permille = 0U;
+        return status;
     }
     return (0U == *p_reference_permille || duty_permille < *p_reference_permille)
                ? PLATFORM_ERR_PARAM
@@ -71,12 +66,13 @@ platform_err_t svc_charge_control_check_duty_reference(const svc_measure_value_t
 
 platform_err_t svc_charge_control_calculate_initial_duty(const svc_measure_value_t *p_value,
                                                          uint16_t *p_duty_permille) {
-    uint16_t       reference_permille;
-    platform_err_t status;
-    if (NULL == p_duty_permille) {
+    uint16_t       reference_permille = 0U;
+    platform_err_t status             = PLATFORM_ERR_OK;
+    if (NULL == p_value || NULL == p_duty_permille) {
         return PLATFORM_ERR_PARAM;
     }
-    status = svc_charge_control_calculate_duty_reference(p_value, &reference_permille);
+    status = svc_charge_control_calculate_duty_reference(p_value, p_value->input_voltage_mv,
+                                                         &reference_permille);
     if (PLATFORM_ERR_OK != status) {
         return status;
     }

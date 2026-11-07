@@ -40,19 +40,14 @@ platform_err_t bsp_power_path_charge_start(uint16_t duty)
 }
 platform_err_t bsp_power_path_charge_set_duty(uint16_t duty)
 {
+    uint64_t floor;
     assert(g_test_pwm);
     if(PLATFORM_ERR_OK != g_test_set_status) { return g_test_set_status; }
-    if(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_state ||
-       SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state ||
-       SVC_CHARGE_STATE_MPPT == g_charge_state)
-    {
-        uint64_t floor = ((uint64_t)g_test_bat * 1000U + g_test_vin / 2U) / g_test_vin;
-        assert(duty >= floor && duty <= 950U);
-        if(0U != g_charge_input_reference_mv)
-        {
-            assert(duty <= g_charge_input_duty_max_permille);
-        }
-    }
+    assert(0U != g_charge_input_voc_mv);
+    floor = ((uint64_t)g_test_bat * 1000U + g_charge_input_voc_mv / 2U) /
+        g_charge_input_voc_mv;
+    assert(duty >= floor && duty <= 950U);
+    assert(duty <= g_charge_input_duty_max_permille);
     g_test_duty = duty; g_test_writes++;
     return PLATFORM_ERR_OK;
 }
@@ -63,498 +58,330 @@ platform_err_t bsp_power_path_charge_stop(void)
     return PLATFORM_ERR_OK;
 }
 static void tick(void) { g_test_sequence++; svc_charge_process(); }
-static void begin(void)
+static void begin_at(uint32_t vin, uint32_t bat)
 {
-    g_test_vin = 20000U; g_test_bat = 13500U; g_test_current = 700U;
+    g_test_vin = vin; g_test_bat = bat; g_test_current = 700U;
     g_test_load = 0U; g_test_stop_status = PLATFORM_ERR_OK;
     g_test_set_status = PLATFORM_ERR_OK;
     assert(PLATFORM_ERR_OK == svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V));
     assert(PLATFORM_ERR_OK == svc_charge_start());
     tick();
     assert(SVC_CHARGE_STATE_START_SETTLE == g_charge_state);
-    assert(675U + SVC_CHARGE_START_DUTY_OFFSET_PERMILLE == g_test_duty && 675U == g_charge_duty_min_reference_permille);
+    assert(vin == g_charge_input_voc_mv);
     tick(); tick();
     assert(SVC_CHARGE_STATE_MPPT == g_charge_state);
 }
-static void begin_legacy(void)
-{
-    begin();
-    /* Isolate existing voltage-ratio/algorithm cases from the new input loop. */
-    g_charge_input_reference_mv = 0U;
-}
-static void test_input_limit(void)
-{
-    const svc_charge_state_t states[] = {
-        SVC_CHARGE_STATE_CONSTANT_CURRENT,
-        SVC_CHARGE_STATE_CONSTANT_VOLTAGE,
-        SVC_CHARGE_STATE_MPPT
-    };
-    unsigned int i;
-    unsigned int j;
-    uint32_t writes;
-    begin();
-    assert(20000U == g_charge_input_voc_mv);
-    assert(17500U == g_charge_input_reference_mv);
-    assert(771U == g_charge_input_duty_max_permille);
-    g_test_bat = 14370U; g_test_vin = 18000U;
-    g_test_duty = g_charge_duty_permille = 830U;
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    tick(); /* Valid interval: actual and requested D share both limits. */
-    assert(821U == g_test_duty && 821U == g_charge_input_duty_max_permille);
-    assert(0U == g_charge_input_range_conflict);
-    g_test_current = 0U;
-    for(i = 0U; i < 30U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault && 1U == g_test_pwm);
-    assert(0U == g_charge_duty_high_limited);
-    /* Equality leaves one usable D; a conflict is strictly min > max. */
-    begin();
-    g_test_bat = 14000U; g_test_vin = 17500U;
-    g_test_duty = g_charge_duty_permille = 800U;
-    tick();
-    assert(800U == g_charge_duty_min_reference_permille);
-    assert(800U == g_charge_input_duty_max_permille);
-    assert(0U == g_charge_input_range_conflict && 1U == g_test_pwm);
-    for(i = 0U; i < sizeof(states) / sizeof(states[0U]); i++)
-    {
-        begin();
-        g_charge_state = states[i];
-        g_test_bat = 14400U; g_test_vin = 17000U;
-        g_test_duty = g_charge_duty_permille = 800U;
-        writes = g_test_writes;
-        tick();
-        assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
-        assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault);
-        assert(1U == g_charge_input_range_conflict);
-        assert(847U == g_charge_duty_min_reference_permille);
-        assert(822U == g_charge_input_duty_max_permille);
-        assert(0U == g_test_pwm && 0U == g_charge_duty_permille);
-        assert(writes == g_test_writes); /* No upward clamp before shutdown. */
-        assert(states[i] == g_charge_fault_state_snapshot);
-        assert(800U == g_charge_fault_duty_snapshot);
-        assert(17000U == g_charge_fault_measure_snapshot.input_voltage_mv);
-        assert(20000U == g_charge_input_voc_mv && 17500U == g_charge_input_reference_mv);
-        svc_charge_process(); /* Same sample cannot advance recovery. */
-        assert(0U == g_charge_recovery_tick_count);
-        for(j = 0U; j < 499U; j++) { tick(); }
-        assert(SVC_CHARGE_STATE_FAULT == g_charge_state && 0U == g_test_pwm);
-        tick();
-        assert(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state && 0U == g_test_pwm);
-        assert(1U == g_charge_input_range_conflict);
-        tick();
-        assert(SVC_CHARGE_STATE_START_SETTLE == g_charge_state && 1U == g_test_pwm);
-        assert(17000U == g_charge_input_voc_mv && 14875U == g_charge_input_reference_mv);
-        assert(0U == g_charge_input_range_conflict);
-        assert(857U == g_charge_duty_permille);
-    }
-    /* Stop failure keeps retrying stop; no new output may be applied. */
-    begin();
-    g_test_vin = 17000U; g_test_stop_status = PLATFORM_ERR_HW;
-    writes = g_test_writes;
-    tick();
-    assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault);
-    assert(0U == g_charge_recovery_armed && writes == g_test_writes);
-    g_test_stop_status = PLATFORM_ERR_OK; tick();
-    assert(1U == g_charge_recovery_armed && 0U == g_test_pwm);
-    assert(0U == g_charge_recovery_tick_count);
-    /* Explicit stop cancels automatic recovery. */
-    assert(PLATFORM_ERR_OK == svc_charge_stop());
-    assert(0U == g_charge_input_range_conflict && 0U == g_charge_input_voc_mv);
-    for(i = 0U; i < 600U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_OFF == g_charge_state && 0U == g_test_pwm);
-    /* Settling also checks conflict before its recomputed PWM update. */
-    assert(PLATFORM_ERR_OK == svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V));
-    g_test_vin = 20000U;
-    assert(PLATFORM_ERR_OK == svc_charge_start()); tick();
-    g_test_vin = 17000U; writes = g_test_writes; tick();
-    assert(SVC_CHARGE_STATE_FAULT == g_charge_state && 0U == g_test_pwm);
-    assert(1U == g_charge_input_range_conflict && writes == g_test_writes);
-    puts("PASS: valid interval clamp, equality, CC/CV/MPPT conflict stops before D update,");
-    puts("      retained evidence, 5 s recovery below old reference, new startup Voc,");
-    puts("      stop failure retry, explicit stop, startup-settle conflict");
-}
-static void test_live_lower_clamp(void)
-{
-    const svc_charge_state_t states[] = {
-        SVC_CHARGE_STATE_CONSTANT_CURRENT,
-        SVC_CHARGE_STATE_CONSTANT_VOLTAGE,
-        SVC_CHARGE_STATE_MPPT
-    };
-    unsigned int i;
-    uint32_t writes;
-    for(i = 0U; i < sizeof(states) / sizeof(states[0U]); i++)
-    {
-        begin();
-        g_charge_state = states[i];
-        if(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == states[i])
-        {
-            g_test_bat = 14400U; g_test_vin = 19917U;
-        }
-        else
-        {
-            g_test_bat = 13500U; g_test_vin = 18672U;
-        }
-        if(SVC_CHARGE_STATE_CONSTANT_CURRENT == states[i])
-        {
-            g_test_current = 10000U;
-        }
-        g_test_duty = g_charge_duty_permille = 720U;
-        writes = g_test_writes;
-        tick();
-        assert(723U == g_test_duty && 723U == g_charge_duty_permille);
-        assert(723U == g_charge_duty_min_reference_permille);
-        assert(SVC_CHARGE_FAULT_NONE == g_charge_fault && 1U == g_test_pwm);
-        assert(states[i] == g_charge_state && writes + 1U == g_test_writes);
-    }
-    begin();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14400U; g_test_vin = 15000U;
-    g_test_duty = g_charge_duty_permille = 950U;
-    writes = g_test_writes;
-    tick();
-    assert(960U == g_charge_duty_min_reference_permille);
-    assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault && 0U == g_test_pwm);
-    assert(writes == g_test_writes);
-    begin();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14400U; g_test_vin = 19917U;
-    g_test_duty = g_charge_duty_permille = 720U;
-    g_test_set_status = PLATFORM_ERR_HW;
-    tick();
-    assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault && 0U == g_test_pwm);
-    assert(720U == g_charge_fault_duty_snapshot);
-    /* Existing overvoltage protection wins before an upward clamp. */
-    begin();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14600U;
-    g_test_duty = g_charge_duty_permille = 720U;
-    writes = g_test_writes;
-    tick();
-    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == g_charge_fault);
-    assert(0U == g_test_pwm && writes == g_test_writes);
-    puts("PASS: CC/CV/MPPT applied D720->723, impossible floor, write failure,");
-    puts("      overvoltage before clamp; every normal PWM write respects live floor");
-}
-int main(void)
+static void begin(void) { begin_at(20000U, 13500U); }
+static void test_ratio_helpers(void)
 {
     svc_measure_value_t value = {0};
     uint16_t reference;
     uint16_t expected;
     uint16_t duty;
-    uint32_t vin;
+    uint32_t voc;
     uint32_t bat;
-    uint32_t writes;
-    unsigned int i;
-    test_input_limit();
-    test_live_lower_clamp();
-    begin_legacy();
-    value.input_voltage_mv = 20000U; value.battery_voltage_mv = 18900U;
-    assert(PLATFORM_ERR_OK == svc_charge_control_calculate_initial_duty(&value, &duty));
-    assert(950U == duty); /* Offset saturates; reference remains 945. */
-    value.battery_voltage_mv = 19020U;
-    assert(PLATFORM_ERR_PARAM == svc_charge_control_calculate_initial_duty(&value, &duty));
-    /* Exhaust integer rounded boundary equivalence under changing inputs. */
-    for(vin = 14001U; vin <= 48000U; vin += 997U)
+    for(voc = 14001U; voc <= 48000U; voc += 997U)
     {
-        for(bat = 10000U; bat < vin && bat <= 14500U; bat += 103U)
+        for(bat = 10000U; bat < voc && bat <= 14500U; bat += 103U)
         {
-            value.input_voltage_mv = vin;
+            /* Actual loaded Vin deliberately differs from the saved Voc. */
+            value.input_voltage_mv = bat + 1000U;
             value.battery_voltage_mv = bat;
             assert(PLATFORM_ERR_OK ==
-                svc_charge_control_calculate_duty_reference(&value, &expected));
+                svc_charge_control_calculate_duty_reference(&value, voc, &expected));
+            assert(expected == ((uint64_t)bat * 1000U + voc / 2U) / voc);
             for(duty = 1U; duty <= 950U; duty++)
             {
-                reference = 675U; /* Intentionally stale cache. */
+                reference = 675U;
                 assert((duty >= expected) == (PLATFORM_ERR_OK ==
-                    svc_charge_control_check_duty_reference(&value, duty, &reference)));
+                    svc_charge_control_check_duty_reference(&value, voc, duty, &reference)));
+                assert(expected == reference);
             }
         }
     }
-    value.input_voltage_mv = 20000U; value.battery_voltage_mv = 13500U;
-    reference = 675U;
-    assert(PLATFORM_ERR_OK == svc_charge_control_check_duty_reference(&value, 675U, &reference));
-    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 674U, &reference));
+    value.input_voltage_mv = 18000U; value.battery_voltage_mv = 14000U;
+    assert(PLATFORM_ERR_OK == svc_charge_control_calculate_duty_reference(&value, 20000U, &reference));
+    assert(700U == reference);
+    assert(PLATFORM_ERR_OK == svc_charge_control_check_duty_reference(&value, 20000U, 700U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 20000U, 699U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 0U, 700U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 14000U, 700U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 20000U, 0U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 20000U, 951U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_calculate_duty_reference(NULL, 20000U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_calculate_duty_reference(&value, 20000U, NULL));
     value.battery_voltage_mv = 0U;
-    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 1U, &reference));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_calculate_duty_reference(&value, 20000U, &reference));
+    value.battery_voltage_mv = 14000U; value.input_voltage_mv = 14000U;
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 20000U, 700U, &reference));
     value.input_voltage_mv = 48000U; value.battery_voltage_mv = 5000U;
-    reference = 675U;
-    assert(PLATFORM_ERR_OK == svc_charge_control_check_duty_reference(&value, 104U, &reference));
-    assert(104U == reference); /* No fixed 150 per-mille floor. */
-    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 103U, &reference));
-    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 0U, &reference));
-    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(NULL, 675U, &reference));
-    value.input_voltage_mv = 0U;
-    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 675U, &reference));
-    /* No unconditional recalculation while live and cached limits are safe. */
-    g_test_vin = 21000U;
+    assert(PLATFORM_ERR_OK == svc_charge_control_check_duty_reference(&value, 48000U, 104U, &reference));
+    assert(104U == reference);
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_check_duty_reference(&value, 48000U, 103U, &reference));
+    value.input_voltage_mv = 20000U; value.battery_voltage_mv = 13500U;
+    assert(PLATFORM_ERR_OK == svc_charge_control_calculate_initial_duty(&value, &duty));
+    assert(685U == duty);
+    value.battery_voltage_mv = 18900U;
+    assert(PLATFORM_ERR_OK == svc_charge_control_calculate_initial_duty(&value, &duty));
+    assert(950U == duty);
+    value.battery_voltage_mv = 19020U;
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_calculate_initial_duty(&value, &duty));
+    assert(PLATFORM_ERR_PARAM == svc_charge_control_calculate_initial_duty(NULL, &duty));
+    puts("PASS: explicit Voc ratio, changing battery, stale cache, invalid reference, startup offset");
+}
+static void test_input_and_clamp(void)
+{
+    const svc_charge_state_t states[] = {
+        SVC_CHARGE_STATE_CONSTANT_CURRENT,
+        SVC_CHARGE_STATE_CONSTANT_VOLTAGE,
+        SVC_CHARGE_STATE_MPPT
+    };
+    unsigned int i;
+    uint32_t writes;
+    uint16_t duty;
+    svc_measure_value_t value = {0};
+    svc_charge_fault_t fault;
+    for(i = 0U; i < sizeof(states) / sizeof(states[0U]); i++)
+    {
+        begin();
+        assert(675U == g_charge_duty_min_reference_permille && 685U == g_test_duty);
+        g_charge_state = states[i];
+        g_test_bat = 14000U; g_test_vin = 17000U;
+        assert(PLATFORM_ERR_OK == svc_measure_get(&value));
+        duty = 690U;
+        assert(PLATFORM_ERR_OK == apply_charge_duty(&value, &duty, 0U, &fault));
+        g_charge_duty_permille = duty;
+        assert(700U == duty && 700U == g_test_duty);
+        assert(700U == g_charge_duty_min_reference_permille);
+        assert(950U == g_charge_input_duty_max_permille);
+        assert(0U == g_charge_input_range_conflict && 0U == g_charge_input_limited);
+        g_test_vin = 22000U;
+        assert(PLATFORM_ERR_OK == svc_measure_get(&value));
+        duty = 699U;
+        assert(PLATFORM_ERR_OK == apply_charge_duty(&value, &duty, 0U, &fault));
+        assert(700U == duty && 700U == g_charge_duty_min_reference_permille);
+        assert(0U == g_charge_input_limited);
+        g_test_bat = 14400U;
+        assert(PLATFORM_ERR_OK == svc_measure_get(&value));
+        duty = 700U;
+        assert(PLATFORM_ERR_OK == apply_charge_duty(&value, &duty, 0U, &fault));
+        assert(720U == duty && 720U == g_charge_duty_min_reference_permille);
+        duty = 900U;
+        assert(PLATFORM_ERR_OK == apply_charge_duty(&value, &duty, 0U, &fault));
+        assert(900U == duty && 950U == g_charge_input_duty_max_permille);
+        assert(20000U == g_charge_input_voc_mv && 17500U == g_charge_input_reference_mv);
+    }
+    /* Reproduce the former min755 > max752 fault frame. */
+    begin_at(20072U, 13500U);
+    g_test_vin = 17512U; g_test_bat = 13216U;
+    g_test_duty = g_charge_duty_permille = 752U;
     tick();
+    assert(SVC_CHARGE_STATE_MPPT == g_charge_state && 1U == g_test_pwm);
+    assert(17563U == g_charge_input_reference_mv);
+    assert(658U == g_charge_duty_min_reference_permille);
+    assert(950U == g_charge_input_duty_max_permille);
+    assert(0U == g_charge_input_range_conflict && SVC_CHARGE_FAULT_NONE == g_charge_fault);
+    /* START_SETTLE recalculates its candidate from live Vin, but the floor uses Voc. */
+    assert(PLATFORM_ERR_OK == svc_charge_stop());
+    g_test_vin = 20000U; g_test_bat = 13500U;
+    assert(PLATFORM_ERR_OK == svc_charge_start()); tick();
+    assert(685U == g_test_duty);
+    g_test_vin = 17000U; tick();
+    assert(SVC_CHARGE_STATE_START_SETTLE == g_charge_state);
     assert(675U == g_charge_duty_min_reference_permille);
-    value.input_voltage_mv = g_test_vin; value.battery_voltage_mv = g_test_bat;
-    assert(PLATFORM_ERR_OK == svc_charge_control_check_duty_reference(&value, 674U,
-        &g_charge_duty_min_reference_permille));
-    assert(643U == g_charge_duty_min_reference_permille);
-    /* User report: applied D=reference=669, downward MPPT probe requests 668.
-     * It must be canceled/rebaselined, not converted to a startup fault. */
-    begin_legacy();
-    g_test_bat = 13380U;
-    g_charge_duty_permille = 669U;
-    g_test_duty = 669U;
-    g_charge_duty_min_reference_permille = 669U;
-    svc_charge_mppt_reset();
-    g_charge_mppt_direction_increase = 0U;
-    writes = g_test_writes;
-    for(i = 0U; i < 50U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_MPPT == g_charge_state);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(669U == g_test_duty && 669U == g_charge_duty_permille);
-    assert(1U == g_test_pwm && writes == g_test_writes);
-    assert(SVC_CHARGE_MPPT_PHASE_REACQUIRE == svc_charge_mppt_get_phase());
-    for(i = 0U; i < 50U; i++) { tick(); }
-    assert(670U == g_test_duty && SVC_CHARGE_STATE_MPPT == g_charge_state);
-    /* A downward step that reaches, but does not cross, the bound is legal. */
-    begin_legacy();
-    g_test_bat = 13380U;
-    g_charge_duty_permille = 670U;
-    g_test_duty = 670U;
-    g_charge_duty_min_reference_permille = 669U;
-    svc_charge_mppt_reset();
-    g_charge_mppt_direction_increase = 0U;
-    for(i = 0U; i < 50U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_MPPT == g_charge_state);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(669U == g_test_duty && 1U == g_test_pwm);
-    begin_legacy();
-    writes = g_test_writes;
-    g_test_vin = 19000U; /* Rising floor corrects already applied D. */
+    assert(804U == g_test_duty); /* No Voc-derived upper clamp. */
+    /* An actually impossible saved-Voc floor still stops before any PWM write. */
+    begin_at(15000U, 13500U);
+    g_test_bat = 14400U; writes = g_test_writes;
     tick();
-    assert(SVC_CHARGE_STATE_MPPT == g_charge_state);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(711U == g_charge_duty_min_reference_permille);
-    assert(1U == g_test_pwm && writes + 1U == g_test_writes);
-    assert(711U == g_test_duty);
-    for(i = 0U; i < 100U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_MPPT == g_charge_state && 1U == g_test_pwm);
-    assert(g_test_duty > 675U && SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    /* Reported failure frame: rounded reference 733 and applied duty 732. */
-    begin_legacy();
-    g_test_vin = 19302U; g_test_bat = 14150U; g_test_current = 597U;
-    g_charge_duty_permille = 732U; g_test_duty = 732U;
-    svc_charge_mppt_reset();
-    g_charge_mppt_direction_increase = 0U;
-    writes = g_test_writes;
-    for(i = 0U; i < 50U; i++) { tick(); }
-    assert(733U == g_charge_duty_min_reference_permille);
-    assert(734U == g_test_duty && writes + 2U == g_test_writes);
-    assert(SVC_CHARGE_STATE_MPPT == g_charge_state && 1U == g_test_pwm);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    for(i = 0U; i < 50U; i++) { tick(); }
-    assert(g_test_duty >= 733U && SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    /* A larger below-floor deviation is corrected in one fresh frame. */
-    begin_legacy();
-    g_test_vin = 19302U; g_test_bat = 14150U; g_test_current = 597U;
-    g_charge_duty_permille = 728U; g_test_duty = 728U;
-    svc_charge_mppt_resume(728U);
-    for(i = 0U; i < 50U; i++) { tick(); }
-    assert(g_test_duty >= 733U && 1U == g_test_pwm);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    /* Encoding errors and invalid voltage relations are not soft bounds. */
-    begin_legacy();
-    g_charge_duty_permille = 951U; g_test_duty = 951U; tick();
     assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault && 0U == g_test_pwm);
-    begin_legacy();
-    g_test_vin = g_test_bat; tick();
-    assert(SVC_CHARGE_FAULT_INPUT_VOLTAGE == g_charge_fault && 0U == g_test_pwm);
-    /* CC uses the same applied/candidate lower clamp. */
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_CURRENT;
-    g_test_vin = 19000U; tick();
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault && 1U == g_test_pwm);
-    assert(711U == g_test_duty);
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_CURRENT;
-    g_charge_duty_permille = 675U; g_test_duty = 675U;
-    g_test_current = 10100U;
-    writes = g_test_writes;
-    tick();
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_state && 1U == g_test_pwm);
-    assert(675U == g_test_duty && writes == g_test_writes);
-    /* Enter CV through its real entry function, then drop Vin.
-     * Increase must pass the old entry duty and recover below a live ratio. */
-    begin_legacy();
-    g_test_vin = 18000U; g_test_bat = 14400U;
-    g_charge_duty_permille = 800U; g_test_duty = 800U;
-    value.input_voltage_mv = g_test_vin; value.battery_voltage_mv = g_test_bat;
-    enter_constant_voltage(&value);
-    g_test_vin = 17000U; g_test_bat = 14370U;
-    writes = g_test_writes;
-    for(i = 0U; i < 50U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault && 1U == g_test_pwm);
-    assert(895U == g_test_duty && writes + 51U == g_test_writes);
-    /* Rising Vin lowers the reference and permits ordinary downward CV. */
-    g_test_vin = 20000U; g_test_bat = 14450U;
-    tick();
-    assert(894U == g_test_duty && SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    begin_legacy();
+    assert(960U == g_charge_duty_min_reference_permille);
+    assert(1U == g_charge_input_range_conflict && writes == g_test_writes);
+    puts("PASS: common CC/CV/MPPT floor, fixed950 ceiling, Vin drop/rise, former conflict, settle");
+}
+static void test_cv_and_mppt(void)
+{
+    unsigned int i;
+    uint32_t writes;
+    begin();
     g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14414U; g_test_vin = 19922U; g_test_current = 638U;
-    g_charge_duty_permille = 723U; g_test_duty = 723U;
+    g_test_bat = 14450U; g_test_vin = 18000U;
+    g_test_duty = g_charge_duty_permille = 723U;
     writes = g_test_writes;
     for(i = 0U; i < 100U; i++) { tick(); }
     assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state && 1U == g_test_pwm);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(724U == g_charge_duty_min_reference_permille);
-    assert(724U == g_test_duty && writes + 1U == g_test_writes);
-    g_test_bat = 14370U; /* CV may increase from its already corrected duty. */
-    tick();
-    assert(725U == g_test_duty && SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    g_test_vin = 20000U; g_test_bat = 14450U;
-    tick(); tick(); /* Both steps down to the new floor are legal. */
-    assert(723U == g_test_duty && SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(0U == g_charge_cv_observation.downward_blocked);
-    writes = g_test_writes;
-    assert(0U == SVC_CHARGE_CV_DUTY_REFERENCE_MARGIN_PERMILLE);
     assert(723U == g_test_duty && writes == g_test_writes);
-    assert(723U == g_charge_cv_observation.duty_min_permille);
-    writes = g_test_writes;
-    tick(); /* Below the adjusted floor: retain CV and PWM. */
-    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state && 1U == g_test_pwm);
-    assert(723U == g_charge_duty_permille && SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(writes == g_test_writes);
-    g_test_load = 1000U;
-    for(i = 0U; i < 600U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state && 1U == g_test_pwm);
-    assert(723U == g_test_duty && writes == g_test_writes);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    assert(1U == g_charge_cv_observation.valid);
-    assert(1U == g_charge_cv_observation.downward_blocked);
-    assert(723U == g_charge_cv_observation.duty_permille);
     assert(723U == g_charge_cv_observation.duty_reference_permille);
-    assert(15211U == g_charge_cv_observation.input_min_reference_mv);
-    assert(0U == g_charge_cv_observation.low_current);
-    assert(0U == g_charge_cv_observation.low_power_boundary);
-    g_test_load = 0U;
-    g_test_current = 101U; tick();
-    assert(0U == g_charge_cv_observation.low_current);
+    assert(723U == g_charge_cv_observation.duty_min_permille);
+    assert(1U == g_charge_cv_observation.downward_blocked);
+    g_test_vin = 17000U; tick();
+    assert(723U == g_test_duty && 723U == g_charge_duty_min_reference_permille);
+    assert(723U == g_charge_cv_observation.duty_min_permille);
+    assert(17000U == g_charge_cv_observation.input_voltage_mv);
     g_test_current = 100U; tick();
     assert(1U == g_charge_cv_observation.low_current);
-    assert(1U == g_charge_cv_observation.near_reference);
-    assert(1U == g_charge_cv_observation.low_power_boundary);
-    assert(723U == g_test_duty && writes == g_test_writes && 1U == g_test_pwm);
-    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    g_test_current = 101U; tick();
+    assert(0U == g_charge_cv_observation.low_current);
     g_test_current = 1500U; g_test_load = 1500U; tick();
     assert(1500U == g_charge_cv_observation.total_output_current_ma);
-    assert(0U == g_charge_cv_observation.low_current); /* Net battery = 0. */
-    g_test_current = 100U; g_test_load = 0U;
-    g_charge_duty_permille = 730U; g_test_duty = 730U; tick();
-    assert(0U == g_charge_cv_observation.near_reference);
-    assert(0U == g_charge_cv_observation.low_power_boundary);
-    assert(1U == g_charge_cv_observation.low_current);
-    assert(729U == g_test_duty); /* Observation does not suppress legal CV. */
-    g_charge_duty_permille = 950U; g_test_duty = 950U;
-    g_test_vin = 15211U; tick();
-    assert(1U == g_charge_cv_observation.input_headroom_low);
-    assert(950U == g_test_duty && 1U == g_test_pwm);
-    g_test_vin = 15212U; tick();
-    assert(0U == g_charge_cv_observation.input_headroom_low);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    /* An already applied below-floor D is raised to the live floor. */
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_vin = 20005U; g_test_bat = 14504U; g_test_current = 385U;
-    g_charge_duty_permille = 718U; g_test_duty = 718U;
-    tick();
-    assert(725U == g_test_duty);
-    assert(725U == g_charge_cv_observation.duty_reference_permille);
-    assert(725U == g_charge_cv_observation.duty_min_permille);
-    for(i = 0U; i < 7U; i++) { tick(); }
-    assert(725U == g_test_duty);
-    writes = g_test_writes;
-    tick();
-    assert(725U == g_test_duty && writes == g_test_writes);
-    assert(1U == g_charge_cv_observation.downward_blocked);
-    /* Rising floor corrects D before the CV algorithm takes its next step. */
-    g_test_vin = 18000U; g_test_bat = 14370U;
-    tick();
-    assert(799U == g_test_duty && SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    /* Voltage below CV exit uses the original CC/MPPT handoff. */
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_vin = 20000U; g_test_bat = 14300U;
-    g_charge_duty_permille = 800U; g_test_duty = 800U;
-    tick();
+    assert(0U == g_charge_cv_observation.low_current);
+    g_test_bat = 14370U; tick();
+    assert(722U == g_test_duty && SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    g_test_bat = 14300U; tick();
     assert(SVC_CHARGE_STATE_MPPT == g_charge_state && 1U == g_test_pwm);
-    /* True faults still shut down in CV. */
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14600U;
-    tick();
-    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == g_charge_fault && 0U == g_test_pwm);
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14414U; g_test_vin = 19922U;
-    g_charge_duty_permille = 723U; g_test_duty = 723U; g_test_current = 12000U;
-    tick();
-    assert(SVC_CHARGE_FAULT_CHARGE_OVERCURRENT == g_charge_fault && 0U == g_test_pwm);
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_charge_duty_permille = 951U; g_test_duty = 951U;
-    tick();
-    assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault && 0U == g_test_pwm);
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14600U;
-    g_test_stop_status = PLATFORM_ERR_HW;
-    tick();
-    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
-    assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault && 1U == g_test_pwm);
-    g_test_stop_status = PLATFORM_ERR_OK;
-    tick(); assert(0U == g_test_pwm);
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    svc_charge_process(); svc_charge_process();
-    assert(SVC_CHARGE_FAULT_SAMPLE_TIMEOUT == g_charge_fault && 0U == g_test_pwm);
-    begin_legacy();
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_bat = 14370U; g_test_vin = 17000U; g_test_current = 0U;
-    g_charge_duty_permille = 950U; g_test_duty = 950U;
-    for(i = 0U; i < 20U; i++) { tick(); }
-    assert(SVC_CHARGE_STATE_FAULT == g_charge_state && 0U == g_test_pwm);
-    assert(SVC_CHARGE_FAULT_INPUT_VOLTAGE == g_charge_fault);
-    /* 24 V downward reference crossing also holds CV/PWM without a new state. */
-    assert(PLATFORM_ERR_OK == svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_24V));
-    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
-    g_test_vin = 40000U; g_test_bat = 28850U; g_test_current = 700U;
-    g_charge_duty_permille = 721U; g_test_duty = 721U; g_test_pwm = 1U;
+    assert(0U == g_charge_input_limited);
+    assert(722U == g_test_duty);
+    assert(SVC_CHARGE_MPPT_PHASE_REACQUIRE == svc_charge_mppt_get_phase());
+    begin();
+    g_test_bat = 13380U; g_test_vin = 18000U;
+    g_test_duty = g_charge_duty_permille = 669U;
+    svc_charge_mppt_reset(); g_charge_mppt_direction_increase = 0U;
     writes = g_test_writes;
-    for(i = 0U; i < 100U; i++) { tick(); }
+    for(i = 0U; i < 50U; i++) { tick(); }
+    assert(669U == g_charge_duty_min_reference_permille && 669U == g_test_duty);
+    assert(SVC_CHARGE_STATE_MPPT == g_charge_state && writes == g_test_writes);
+    assert(SVC_CHARGE_MPPT_PHASE_REACQUIRE == svc_charge_mppt_get_phase());
+    for(i = 0U; i < 50U; i++) { tick(); }
+    assert(670U == g_test_duty && SVC_CHARGE_FAULT_NONE == g_charge_fault);
+    assert(PLATFORM_ERR_OK == svc_charge_stop());
+    assert(0U == g_charge_cv_observation.valid && 0U == g_charge_input_voc_mv);
+    puts("PASS: CV diagnostics match saved-Voc floor, current observation, CV exit, MPPT lower probe");
+}
+static void test_cv_input_constraint(void)
+{
+    unsigned int i;
+    uint32_t writes;
+    begin();
+    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
+    g_test_bat = 14370U; g_test_vin = 20000U;
+    g_test_duty = g_charge_duty_permille = 930U;
+    writes = g_test_writes;
+    tick();
+    assert(931U == g_test_duty && writes + 1U == g_test_writes);
+    assert(0U == g_charge_input_limited && 950U == g_charge_input_duty_max_permille);
+    g_test_vin = 17499U;
+    writes = g_test_writes; tick();
+    assert(930U == g_test_duty && writes + 1U == g_test_writes);
+    assert(1U == g_charge_input_limited && 0U == g_charge_duty_high_limited);
+    assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state);
+    svc_charge_process(); /* A repeated sample cannot perform another step. */
+    assert(930U == g_test_duty && writes + 1U == g_test_writes);
+    tick();
+    assert(929U == g_test_duty && writes + 2U == g_test_writes);
+    /* Recover into the hysteresis band: hold instead of continuing to shed. */
+    g_test_vin = 17500U; writes = g_test_writes; tick();
+    assert(929U == g_test_duty && writes == g_test_writes && 1U == g_charge_input_limited);
+    g_test_vin = 17699U; tick();
+    assert(929U == g_test_duty && writes == g_test_writes && 1U == g_charge_input_limited);
+    g_test_vin = 17700U; tick();
+    assert(930U == g_test_duty && writes + 1U == g_test_writes && 0U == g_charge_input_limited);
+    /* Once released, Vin in the band does not re-enter limiting. */
+    g_test_vin = 17501U; tick();
+    assert(931U == g_test_duty && 0U == g_charge_input_limited);
+    /* CV/CC reductions win in both the low-input and recovery bands. */
+    g_test_vin = 17499U; g_test_bat = 14450U;
+    writes = g_test_writes; tick();
+    assert(930U == g_test_duty && writes + 1U == g_test_writes);
+    assert(1U == g_charge_input_limited); /* Exactly one decrement, not two. */
+    g_test_vin = 17550U; tick();
+    assert(929U == g_test_duty && 1U == g_charge_input_limited);
+    g_test_bat = 14370U; g_test_current = 10100U; tick();
+    assert(928U == g_test_duty && 1U == g_charge_input_limited);
+    /* Dmin blocks further shedding without introducing a fault/PWM stop.
+     * Net battery current is negative; frontend still contributes 500 mA. */
+    g_test_vin = 17000U; g_test_current = 500U; g_test_load = 1000U;
+    for(i = 0U; i < 300U; i++) { tick(); }
+    assert(719U == g_test_duty && 719U == g_charge_duty_min_reference_permille);
     assert(SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state && 1U == g_test_pwm);
-    assert(721U == g_test_duty && writes == g_test_writes);
-    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault);
-    begin_legacy();
-    assert(PLATFORM_ERR_OK == svc_charge_stop());
-    assert(0U == g_charge_cv_observation.valid);
-    assert(PLATFORM_ERR_OK == svc_charge_start());
-    tick();
-    g_test_bat = 13550U;
-    tick(); /* Settling may recompute startup D before checking that new D. */
-    assert(SVC_CHARGE_STATE_START_SETTLE == g_charge_state);
-    assert(678U + SVC_CHARGE_START_DUTY_OFFSET_PERMILLE == g_test_duty);
-    tick();
-    assert(SVC_CHARGE_STATE_MPPT == g_charge_state);
-    assert(PLATFORM_ERR_OK == svc_charge_stop());
-    assert(0U == g_charge_cv_observation.valid);
-    assert(PLATFORM_ERR_OK == svc_charge_start());
-    g_test_bat = 0U;
+    assert(SVC_CHARGE_FAULT_NONE == g_charge_fault && 1U == g_charge_input_limited);
+    assert(1U == g_charge_cv_observation.downward_blocked);
     writes = g_test_writes;
-    tick();
-    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
-    assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault);
+    for(i = 0U; i < 50U; i++) { tick(); }
+    assert(719U == g_test_duty && writes == g_test_writes);
+    /* A prior attempt to increase at 950 must not leave input-loss armed. */
+    g_test_duty = g_charge_duty_permille = 950U;
+    g_test_current = 0U; g_test_load = 1000U; tick();
+    assert(949U == g_test_duty && 0U == g_charge_duty_high_limited);
+    /* Existing CV exit keeps D and hands over to fresh MPPT acquisition. */
+    g_test_current = 500U; g_test_bat = 14300U; tick();
+    assert(SVC_CHARGE_STATE_MPPT == g_charge_state && 949U == g_test_duty);
+    assert(0U == g_charge_input_limited && SVC_CHARGE_MPPT_PHASE_REACQUIRE == svc_charge_mppt_get_phase());
+    /* Below-reference input is not a new constraint on MPPT/CC. */
+    begin(); g_test_vin = 17000U;
+    g_test_duty = g_charge_duty_permille = 900U;
+    svc_charge_mppt_reset();
+    for(i = 0U; i < 50U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_MPPT == g_charge_state && 901U == g_test_duty);
+    assert(0U == g_charge_input_limited);
+    begin(); g_test_vin = 17000U; g_test_current = 9950U;
+    g_charge_state = SVC_CHARGE_STATE_CONSTANT_CURRENT;
+    g_test_duty = g_charge_duty_permille = 900U; tick();
+    assert(SVC_CHARGE_STATE_CONSTANT_CURRENT == g_charge_state && 901U == g_test_duty);
+    assert(0U == g_charge_input_limited);
+    assert(PLATFORM_ERR_OK == svc_charge_stop());
+    assert(0U == g_charge_input_limited);
+    puts("PASS: CV input step once/frame, hysteresis hold/release, CC/CV priority, floor hold,");
+    puts("      partial load supply, no false high-limit, unchanged MPPT/CC, smooth CV exit");
+}
+static void test_faults_and_recovery(void)
+{
+    unsigned int i;
+    uint32_t writes;
+    begin();
+    g_charge_state = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
+    g_test_bat = 14600U; writes = g_test_writes; tick();
+    assert(SVC_CHARGE_FAULT_BATTERY_OVERVOLTAGE == g_charge_fault);
     assert(0U == g_test_pwm && writes == g_test_writes);
-    puts("PASS: rounded dynamic guard over input/battery/PWM ranges, stale cache,");
-    puts("      shared live lower clamp, CC/CV/MPPT, CV hold/OVP/OC");
-    puts("      100 mA observation/headroom, preserved control/startup, missing Vbat OFF");
+    begin(); g_test_current = 12000U; tick();
+    assert(SVC_CHARGE_FAULT_CHARGE_OVERCURRENT == g_charge_fault && 0U == g_test_pwm);
+    begin(); g_test_vin = g_test_bat; tick();
+    assert(SVC_CHARGE_FAULT_INPUT_VOLTAGE == g_charge_fault && 0U == g_test_pwm);
+    begin(); g_charge_input_voc_mv = 0U; writes = g_test_writes; tick();
+    assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault && 0U == g_test_pwm);
+    assert(writes == g_test_writes);
+    begin(); g_charge_input_reference_mv = 0U; writes = g_test_writes; tick();
+    assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault && 0U == g_test_pwm);
+    assert(writes == g_test_writes);
+    begin(); g_test_bat = 0U; tick();
+    assert(0U == g_test_pwm && SVC_CHARGE_FAULT_NONE != g_charge_fault);
+    begin(); g_test_set_status = PLATFORM_ERR_HW;
+    g_test_duty = g_charge_duty_permille = 600U; tick();
+    assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault && 0U == g_test_pwm);
+    begin();
+    g_test_duty = g_charge_duty_permille = 951U;
+    writes = g_test_writes; tick();
+    assert(SVC_CHARGE_FAULT_DUTY_LIMIT == g_charge_fault && writes == g_test_writes);
+    assert(SVC_CHARGE_STATE_MPPT == g_charge_fault_state_snapshot);
+    assert(951U == g_charge_fault_duty_snapshot && 0U == g_test_pwm);
+    g_test_vin = 17000U;
+    svc_charge_process(); assert(0U == g_charge_recovery_tick_count);
+    for(i = 0U; i < 499U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_FAULT == g_charge_state);
+    tick(); assert(SVC_CHARGE_STATE_WAIT_SAMPLE == g_charge_state);
+    tick();
+    assert(SVC_CHARGE_STATE_START_SETTLE == g_charge_state && 1U == g_test_pwm);
+    assert(17000U == g_charge_input_voc_mv && 14875U == g_charge_input_reference_mv);
+    assert(794U == g_charge_duty_min_reference_permille && 804U == g_test_duty);
+    begin(); g_test_stop_status = PLATFORM_ERR_HW;
+    g_test_duty = g_charge_duty_permille = 951U; tick();
+    assert(SVC_CHARGE_FAULT_POWER_PATH == g_charge_fault && 0U == g_charge_recovery_armed);
+    g_test_stop_status = PLATFORM_ERR_OK; tick();
+    assert(1U == g_charge_recovery_armed && 0U == g_test_pwm);
+    assert(PLATFORM_ERR_OK == svc_charge_stop());
+    for(i = 0U; i < 600U; i++) { tick(); }
+    assert(SVC_CHARGE_STATE_OFF == g_charge_state && 0U == g_test_pwm);
+    begin(); svc_charge_process(); svc_charge_process();
+    assert(SVC_CHARGE_FAULT_SAMPLE_TIMEOUT == g_charge_fault && 0U == g_test_pwm);
+    puts("PASS: OVP/OC/input/timeout, invalid Voc/range, PWM failure, snapshot, recovery/re-sample, stop");
+}
+int main(void)
+{
+    assert(PLATFORM_ERR_OK == svc_charge_init(SVC_CHARGE_BATTERY_SYSTEM_12V));
+    test_ratio_helpers();
+    test_input_and_clamp();
+    test_cv_and_mppt();
+    test_cv_input_constraint();
+    test_faults_and_recovery();
     return 0;
 }
 '@

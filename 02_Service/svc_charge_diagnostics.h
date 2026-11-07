@@ -36,7 +36,7 @@ typedef struct SVC_CHARGE_CV_OBSERVATION_T {
     int32_t  duty_gap_permille;
     uint16_t duty_permille;
     uint16_t duty_reference_permille;
-    uint16_t duty_min_permille; /* Live voltage-ratio floor. */
+    uint16_t duty_min_permille; /* Vbat/startup Voc reference floor. */
     uint8_t  valid;
     uint8_t  near_reference;
     uint8_t  low_current;
@@ -50,7 +50,6 @@ typedef struct SVC_CHARGE_CV_OBSERVATION_T {
 extern svc_charge_cv_observation_t g_charge_cv_observation;
 extern int32_t                     g_charge_current_error_ma;
 extern int32_t                     g_charge_voltage_error_mv;
-extern uint8_t                     g_charge_input_limited;
 extern uint8_t                     g_charge_current_limited;
 extern svc_measure_value_t         g_charge_fault_measure_snapshot;
 extern svc_charge_state_t          g_charge_fault_state_snapshot;

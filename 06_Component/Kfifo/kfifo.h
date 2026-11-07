@@ -21,8 +21,7 @@
 /* define -------------------------------------------------------------------*/
 
 /* typedef ------------------------------------------------------------------*/
-typedef struct KFIFO_T
-{
+typedef struct KFIFO_T {
     uint8_t *buffer;
     uint32_t size;
     uint32_t in;
@@ -66,15 +65,14 @@ uint8_t kfifo_advance_in(kfifo_t *fifo, uint32_t len);
  * @retval           :  [0 successful]
  * @param[in]        :  [kfifo_t *fifo uint32_t *buffer_size]
  */
-uint8_t kfifo_get_buffer_size(kfifo_t *fifo , uint32_t *buffer_size);
+uint8_t kfifo_get_buffer_size(kfifo_t *fifo, uint32_t *buffer_size);
 
 /**
  * @brief            :  [kfifo_len]
  * @retval           :  [number of bytes in the fifo]
  * @param[in]        :  [kfifo_t* fifo]
  */
-static inline uint32_t kfifo_len(const kfifo_t *fifo)
-{
+static inline uint32_t kfifo_len(const kfifo_t *fifo) {
     return fifo->in - fifo->out;
 }
 
@@ -83,8 +81,7 @@ static inline uint32_t kfifo_len(const kfifo_t *fifo)
  * @retval           :  [number of bytes available in the fifo]
  * @param[in]        :  [kfifo_t* fifo]
  */
-static inline uint32_t kfifo_avail(const kfifo_t *fifo)
-{
+static inline uint32_t kfifo_avail(const kfifo_t *fifo) {
     return fifo->size - kfifo_len(fifo);
 }
 
@@ -93,8 +90,7 @@ static inline uint32_t kfifo_avail(const kfifo_t *fifo)
  * @retval           :  [number of bytes available for writing]
  * @param[in]        :  [kfifo_t* fifo]
  */
-static inline uint32_t kfifo_contig_write_space(const kfifo_t *fifo)
-{
+static inline uint32_t kfifo_contig_write_space(const kfifo_t *fifo) {
     return fifo->size - (fifo->in & (fifo->size - 1));
 }
 
@@ -103,8 +99,7 @@ static inline uint32_t kfifo_contig_write_space(const kfifo_t *fifo)
  * @retval           :  [number of bytes available for reading]
  * @param[in]        :  [kfifo_t* fifo]
  */
-static inline uint32_t kfifo_contig_read_data(const kfifo_t *fifo)
-{
+static inline uint32_t kfifo_contig_read_data(const kfifo_t *fifo) {
     return fifo->size - (fifo->out & (fifo->size - 1));
 }
 

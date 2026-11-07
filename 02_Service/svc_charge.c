@@ -37,6 +37,7 @@ uint32_t           g_charge_input_voc_mv;
 uint32_t           g_charge_input_reference_mv;
 uint16_t           g_charge_input_duty_max_permille;
 uint8_t            g_charge_input_range_conflict;
+uint8_t            g_charge_input_limited;
 uint32_t           g_charge_last_sequence;
 uint16_t           g_charge_stale_tick_count;
 uint16_t           g_charge_settle_tick_count;
@@ -73,6 +74,7 @@ static void reset_control_runtime(void) {
     g_charge_input_reference_mv          = 0U;
     g_charge_input_duty_max_permille     = 0U;
     g_charge_input_range_conflict        = 0U;
+    g_charge_input_limited               = 0U;
     reset_recovery_runtime();
 }
 
@@ -92,6 +94,7 @@ static void enter_constant_voltage(const svc_measure_value_t *p_value) {
     svc_charge_mppt_pause(g_charge_duty_permille);
     g_charge_voltage_error_mv = (int32_t)p_config->voltage_target_mv -
                                 (int32_t)p_value->battery_voltage_mv;
+    g_charge_input_limited    = 0U;
     g_charge_state            = SVC_CHARGE_STATE_CONSTANT_VOLTAGE;
 }
 
@@ -106,7 +109,8 @@ static void select_tracking_state(const svc_measure_value_t *p_value) {
     if (NULL == p_value) {
         return;
     }
-    cc = (SVC_CHARGE_STATE_CONSTANT_CURRENT == previous) ? 1U : 0U;
+    g_charge_input_limited = 0U;
+    cc                     = (SVC_CHARGE_STATE_CONSTANT_CURRENT == previous) ? 1U : 0U;
     if (0U == cc) {
         cc = (p_config->current_target_ma - p_config->current_deadband_ma <=
               p_value->input_current_ma)
@@ -209,38 +213,31 @@ static void enter_fault(svc_charge_fault_t fault, platform_err_t status) {
 /* Keep the old Voc while loaded. An empty duty interval stops this run;
  * only a later PWM-off startup may replace the reference.
  */
-static platform_err_t update_input_limit(const svc_measure_value_t *p_value) {
-    platform_err_t status;
-    uint64_t       duty;
+static platform_err_t update_duty_limits(const svc_measure_value_t *p_value) {
+    platform_err_t status = PLATFORM_ERR_OK;
 
     if (NULL == p_value) {
         return PLATFORM_ERR_PARAM;
     }
-    if (0U == g_charge_input_reference_mv) {
-        return PLATFORM_ERR_OK;
+    if (0U == g_charge_input_voc_mv || 0U == g_charge_input_reference_mv) {
+        return PLATFORM_ERR_PARAM;
     }
-    status = svc_charge_control_calculate_duty_reference(p_value,
+    status = svc_charge_control_calculate_duty_reference(p_value, g_charge_input_voc_mv,
                                                          &g_charge_duty_min_reference_permille);
     if (PLATFORM_ERR_OK != status) {
         return status;
     }
-    duty = ((uint64_t)p_value->battery_voltage_mv * 1000U) / g_charge_input_reference_mv;
-    if (duty > BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE) {
-        duty = BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE;
-    }
-    if (duty < BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE) {
-        duty = BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE;
-    }
-    g_charge_input_duty_max_permille = (uint16_t)duty;
-    g_charge_input_limited = (p_value->input_voltage_mv < g_charge_input_reference_mv) ? 1U : 0U;
-    g_charge_input_range_conflict = (g_charge_duty_min_reference_permille >
-                                     g_charge_input_duty_max_permille)
-                                        ? 1U
-                                        : 0U;
+    /* Keep the Watch symbol, now reporting the actual fixed PWM ceiling.
+     * Voc-derived voltage is a CV regulation reference, not a hard Dmax. */
+    g_charge_input_duty_max_permille = BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE;
+    g_charge_input_range_conflict    = (g_charge_duty_min_reference_permille >
+                                        g_charge_input_duty_max_permille)
+                                           ? 1U
+                                           : 0U;
     return (0U != g_charge_input_range_conflict) ? PLATFORM_ERR_PARAM : PLATFORM_ERR_OK;
 }
 
-/* Normalize running CC/CV/MPPT commands to the live ratio before PWM write.
+/* Normalize running CC/CV/MPPT commands to Vbat/startup Voc before PWM write.
  * Startup remains strict; an impossible floor never authorizes PWM > 950.
  */
 static platform_err_t apply_charge_duty(const svc_measure_value_t *p_value,
@@ -256,12 +253,12 @@ static platform_err_t apply_charge_duty(const svc_measure_value_t *p_value,
     }
     *p_fault = SVC_CHARGE_FAULT_NONE;
     duty     = *p_duty_permille;
-    status   = update_input_limit(p_value);
+    status   = update_duty_limits(p_value);
     if (PLATFORM_ERR_OK != status) {
         *p_fault = SVC_CHARGE_FAULT_DUTY_LIMIT;
         return status;
     }
-    status = svc_charge_control_check_duty_reference(p_value, duty,
+    status = svc_charge_control_check_duty_reference(p_value, g_charge_input_voc_mv, duty,
                                                      &g_charge_duty_min_reference_permille);
     if (PLATFORM_ERR_OK != status) {
         if (0U != start || NULL == p_value ||
@@ -282,10 +279,6 @@ static platform_err_t apply_charge_duty(const svc_measure_value_t *p_value,
         if (SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state) {
             g_charge_cv_observation.downward_blocked = 1U;
         }
-    }
-    if (0U != g_charge_input_reference_mv && duty > g_charge_input_duty_max_permille) {
-        duty    = g_charge_input_duty_max_permille;
-        clamped = 1U;
     }
     if (0U != start || duty != g_charge_duty_permille) {
         status = (0U != start) ? bsp_power_path_charge_start(duty)
@@ -416,7 +409,7 @@ static void process_wait_sample(void) {
      * An out-of-range ratio remains observable, without authorizing that PWM.
      */
     if (PLATFORM_ERR_OK !=
-        svc_charge_control_calculate_duty_reference(&value,
+        svc_charge_control_calculate_duty_reference(&value, value.input_voltage_mv,
                                                     &g_charge_duty_min_reference_permille)) {
         g_charge_duty_min_reference_permille = 0U;
     }
@@ -567,8 +560,10 @@ static void process_constant_current(void) {
 static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
                                      uint32_t                   voltage_target_mv,
                                      svc_charge_fault_t        *p_fault) {
-    svc_charge_control_result_t control_result;
-    platform_err_t              status;
+    const svc_charge_config_t  *p_config       = svc_charge_config_get();
+    svc_charge_control_result_t control_result = {0};
+    platform_err_t              status         = PLATFORM_ERR_OK;
+    uint16_t                    input_duty     = g_charge_duty_permille;
 
     if (NULL == p_value || NULL == p_fault) {
         return PLATFORM_ERR_PARAM;
@@ -576,13 +571,48 @@ static platform_err_t adjust_cv_duty(const svc_measure_value_t *p_value,
     *p_fault = SVC_CHARGE_FAULT_NONE;
     status   = svc_charge_control_calculate_cv(p_value, g_charge_duty_permille, voltage_target_mv,
                                                &control_result);
-    g_charge_current_error_ma  = control_result.current_error_ma;
-    g_charge_voltage_error_mv  = control_result.voltage_error_mv;
-    g_charge_duty_high_limited = control_result.duty_high_limited;
     if (PLATFORM_ERR_OK != status) {
         *p_fault = SVC_CHARGE_FAULT_DUTY_LIMIT;
         return status;
     }
+    /* Only CV yields to this input-voltage constraint. Update once per fresh
+     * CV frame here, never in the shared measurement/PWM normalization path. */
+    if (SVC_CHARGE_STATE_CONSTANT_VOLTAGE == g_charge_state) {
+        if (0U == g_charge_input_reference_mv) {
+            *p_fault = SVC_CHARGE_FAULT_DUTY_LIMIT;
+            return PLATFORM_ERR_PARAM;
+        }
+        if (p_value->input_voltage_mv < g_charge_input_reference_mv) {
+            g_charge_input_limited = 1U;
+        } else if ((uint64_t)p_value->input_voltage_mv >=
+                   (uint64_t)g_charge_input_reference_mv +
+                       SVC_CHARGE_CV_INPUT_RECOVER_HYSTERESIS_MV) {
+            g_charge_input_limited = 0U;
+        }
+        if (0U != g_charge_input_limited) {
+            if (p_value->input_voltage_mv < g_charge_input_reference_mv) {
+                if ((uint32_t)input_duty >= (uint32_t)g_charge_duty_min_reference_permille +
+                                                p_config->control_step_permille) {
+                    input_duty -= p_config->control_step_permille;
+                } else {
+                    input_duty                               = g_charge_duty_min_reference_permille;
+                    g_charge_cv_observation.downward_blocked = 1U;
+                }
+            }
+            /* Below reference: reduce demand. In the recovery band: hold.
+             * A lower CV/CC request always wins, without a second decrement. */
+            if (input_duty < control_result.duty_permille) {
+                control_result.duty_permille = input_duty;
+            }
+            control_result.duty_changed = (control_result.duty_permille != g_charge_duty_permille)
+                                              ? 1U
+                                              : 0U;
+            control_result.duty_high_limited = 0U;
+        }
+    }
+    g_charge_current_error_ma  = control_result.current_error_ma;
+    g_charge_voltage_error_mv  = control_result.voltage_error_mv;
+    g_charge_duty_high_limited = control_result.duty_high_limited;
     if (0U == control_result.duty_changed) {
         return PLATFORM_ERR_OK;
     }
@@ -603,6 +633,7 @@ static void enter_charge_wait(void) {
     }
     g_charge_duty_permille     = 0U;
     g_charge_duty_high_limited = 0U;
+    g_charge_input_limited     = 0U;
     reset_mppt_runtime();
 #if SVC_CHARGE_ENABLE_MAINTENANCE
     svc_charge_maintenance_idle();
