@@ -1,36 +1,35 @@
 /**
- ******************************************************************************
+ ***************************************************************************************************
  *@file               :   svc_measure.h
  *@brief              :   Provide simple measurement access to applications.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
- ******************************************************************************
+ ***************************************************************************************************
  */
 
-/* define to prevent recursive inclusion ------------------------------------*/
+/* define to prevent recursive inclusion ---------------------------------------------------------*/
 #ifndef SVC_MEASURE_H
 #define SVC_MEASURE_H
 
-/* includes -----------------------------------------------------------------*/
+/* includes --------------------------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stddef.h>
 #include "bsp_measure.h"
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif // end of __cplusplus
-/* define -------------------------------------------------------------------*/
+/* define ----------------------------------------------------------------------------------------*/
 #define SVC_MEASURE_TEMPERATURE_INVALID (BSP_MEASURE_TEMPERATURE_INVALID)
 #define SVC_MEASURE_READY_FRAME_COUNT (256U)
 
-/* typedef ------------------------------------------------------------------*/
+/* typedef ---------------------------------------------------------------------------------------*/
 /* IN_CUR is Buck output current; OUT_CUR is external load current. */
 typedef bsp_measure_value_t svc_measure_value_t;
 
-/* variables ----------------------------------------------------------------*/
+/* variables -------------------------------------------------------------------------------------*/
 
-/* function  ----------------------------------------------------------------*/
+/* function  -------------------------------------------------------------------------------------*/
 /* Startup once after ADC/DMA initialization, before the sampling timer starts.
  * Main context only. Does not start the trigger or enable power output. */
 platform_err_t svc_measure_init(void);
@@ -48,4 +47,4 @@ uint32_t svc_measure_get_sequence(void);
 #endif // end of __cplusplus
 
 #endif /* SVC_MEASURE_H */
-/* end of file --------------------------------------------------------------*/
+/* end of file -----------------------------------------------------------------------------------*/

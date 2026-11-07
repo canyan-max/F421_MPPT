@@ -1,12 +1,13 @@
 ---
 name: c-code-style
-description: 在本项目编写或修改自研 C/H 代码时，遵循项目变量命名前缀和工作区 .clang-format，重点检查 80 列换行及 if 控制语句格式；不批量重排厂商或生成代码。
+description: 编写或修改自研 C/H 代码时，遵循变量命名前缀及技能自带的 .clang-format，通过随附 Windows 工具格式化；不批量重排厂商或生成代码。
 ---
 
 # C 代码规范
 
 ## 格式来源
-- 每次应用前读取当前工作区根目录的 `.clang-format`，以实际配置为准，不复制一份配置到 skill 中。
+- 每次应用前读取本技能目录中的 `.clang-format`，以实际配置为准。`clang-format.exe` 和 `scripts/format-c-code.ps1` 随技能一起迁移，不依赖工程根目录中的工具或配置。
+- 大括号位置、控制语句空格等排版规则跟随 `.clang-format`；配置调整后同步本文示例，不沿用旧排版要求覆盖配置。
 - 新建文件的文件头、分区和保护宏同时遵循项目 `c-header-template` skill。该 skill 管文件布局，本 skill 管代码规范，.clang-format 管排版；用户明确要求的文件头布局优先于 formatter 默认行为。
 
 ## 变量命名
@@ -42,17 +43,16 @@ static uint16_t get_u16_be(const uint8_t *p_data)
 - 对允许为空的可选指针、允许零长度的接口按明确契约处理，不机械拒绝合法调用。指针判空和长度校验只能验证已知条件，不能证明任意地址可访问或调用方提供的容量真实。
 - 参数失败时提前返回，错误码、默认值或错误上报沿用接口约定；不保留 `return xx` 占位符，不擅自选择会与有效数据混淆的错误返回值。
 - 例如 get_u16_be 读取两个字节时，除空指针检查外还必须由长度参数或明确的调用契约保证至少两个可读字节。
-- 检查使用 Allman 大括号和四空格缩进，禁止为了简短把 if、return、括号合并成一行。
+- 入口检查的排版遵循 `.clang-format`，禁止为了简短把 if 和 return 等执行语句合并成一行。
 ## 条件比较
 - 相等、不等比较的一侧为常量时，将常量写在左侧，例如 `NULL == p_buffer`、`NULL != pf_callback`、`0U == count`、`0U != g_adc_running`。
 - 保留常量的类型后缀及原有表达式含义；运算符两侧空格及长条件换行由 `.clang-format` 处理，不照抄示例中缺失或多余的空格。
 - 调整比较方向时保留所有校验条件，不因缩短示例而删除 callback 空指针、通道数量或指针对齐检查。
 
 ```c
-if(NULL == p_buffer || NULL == pf_callback || 0U == count ||
-   0U != count % (2U * PLAT_ADC_CHANNEL_COUNT) ||
-   0U != ((uint32_t)p_buffer & 1U))
-{
+if (NULL == p_buffer || NULL == pf_callback || 0U == count ||
+    0U != count % (2U * PLAT_ADC_CHANNEL_COUNT) ||
+    0U != ((uint32_t)p_buffer & 1U)) {
     /* Existing error handling. */
 }
 ```
@@ -81,8 +81,7 @@ if(NULL == p_buffer || NULL == pf_callback || 0U == count ||
 - 示例中的末尾 `_NUM` 表示数量，保留末项逗号。只有从零开始的连续枚举才可直接将 `_NUM` 用作数量；特殊取值枚举不机械添加数量项。
 
 ```c
-typedef enum PLAT_DCMI_EVENT_T
-{
+typedef enum PLAT_DCMI_EVENT_T {
     PLAT_DCMI_EVENT_FRAME_READY = 0U,
     PLAT_DCMI_EVENT_OVERRUN,
     PLAT_DCMI_EVENT_ERROR,
@@ -90,15 +89,16 @@ typedef enum PLAT_DCMI_EVENT_T
 } plat_dcmi_event_t;
 ```
 ## 重点要求
-- 代码以 80 列为换行目标（`ColumnLimit: 80`）；长条件、参数列表等按 formatter 规则换行，不通过压缩空格或改写逻辑凑列宽。
-- if、else、for、while、do 的语句体必须加大括号，即使只有一条语句；else if 链保留常规结构。大括号使用 Allman 格式独占一行，禁止把条件和执行语句合在一行。
+- 代码以 100 列为换行目标（`ColumnLimit: 100`）；长条件、参数列表等按 formatter 规则换行，不通过压缩空格或改写逻辑凑列宽。
+- if、else、for、while、do 的语句体必须加大括号，即使只有一条语句；else if 链保留常规结构。大括号位置遵循 `.clang-format`，禁止把条件和执行语句合在一行。
 - 当前 formatter 配置不保证自动补齐大括号，编写或修改时主动补齐；添加时保持原有 else 归属和控制流程，不顺带修改无关代码。
-- 其余缩进、空格、对齐、指针及换行行为交给 `.clang-format`。当前为四空格、禁用 tab、`if(condition)`，不手工另立冲突规则。
-- 80 列是格式化目标，不保证所有行硬截断；不可拆分的字符串、标识符及模板分隔注释不得为凑列宽而破坏内容。
+- 缩进、空格、对齐、指针及换行行为交给 `.clang-format`，不手工另立冲突规则。
+- 100 列是格式化目标，不保证所有行硬截断；不可拆分的字符串、标识符及模板分隔注释不得为凑列宽而破坏内容。
 
 ## 初始化、边界及状态处理
 - 全局变量及文件作用域 static 变量需要零值或空指针初值时可以省略显式初始化，使用 C 的静态存储期默认初始化；需要非零初值时显式指定。此规则不适用于自动存储期局部变量，也不覆盖 no-init 等特殊链接段的启动约定。
-- 局部变量使用前必须初始化或在所有可达路径上明确赋值。指针可初始化为 NULL，其他变量按实际含义选择初始值，不用随意默认值掩盖遗漏分支。
+- 新增或修改的局部变量在声明时显式初始化：指针通常为 NULL，无符号计数通常为 0U，结构体或数组按需使用 {0}；其他变量按实际含义选择初始值，也可直接用有效表达式初始化。不为套用初值改变既有类型或逻辑，不顺带批量修改无关变量。
+- 初始化不能代替分支完整性和返回值检查；读取数据或调用接口失败时按约定处理，不继续使用默认值掩盖失败。
 - 真实数组的元素数量优先使用 sizeof(array) / sizeof(array[0U]) 推导，避免手写数量与数组定义失配；此方法禁止用于指针或已退化为指针的函数数组形参。
 - 状态返回值必须检查并按接口约定处理；例如 ADC 启动失败时不继续执行依赖有效采样的操作。确实允许忽略时说明原因，不用强转 void 代替错误处理。
 
@@ -114,6 +114,8 @@ typedef enum PLAT_DCMI_EVENT_T
 ## 应用范围与检查
 - 仅格式化本次授权修改的自研文件或相关范围；不顺带重排全工程、厂商库、第三方或生成代码。
 - 文件头按 c-header-template 保留，包含 @brief 续行对齐；对文件头以后的代码范围运行格式化并检查差异。不要用全文格式化或全文 dry-run 的通过与否覆盖已确认的文件头例外。
-- 使用可用的 clang-format 并显式指定工作区配置（如 `--style=file`）；先检查工具版本是否支持当前配置。工具缺失或配置不兼容时说明，不擅自降级或删除配置项。
+- 使用 PowerShell 7 调用本技能的 `scripts/format-c-code.ps1`，通过 `-Path` 显式传入本次修改的自研 C/H 文件列表。脚本使用技能自身的 exe 和配置，不接收目录或通配符；由调用方核对文件归属，不传入厂商、第三方和生成文件。
+- 例如在工程根目录运行：`& ./.agents/skills/c-code-style/scripts/format-c-code.ps1 -Path '02_Service/svc_comm.c', '02_Service/svc_comm.h'`。技能位于其他位置时使用其实际脚本路径；相对源文件路径以当前工作目录为准。
+- 先检查随附工具版本是否支持配置。工具缺失或配置不兼容时说明，不擅自降级或删除配置项；此工具包适用于 Windows，不保证其他操作系统可运行 exe。
 - clang-format 只验证排版，不能证明命名、边界检查、错误处理或硬件正确；这些规则需另行检查。检查格式化差异，保留 include 顺序、宏和注释含义，确认没有逻辑变化。
 - 实际源码修改按项目 AGENTS.md 执行编译验证；仅修改 skill 文档无需编译。

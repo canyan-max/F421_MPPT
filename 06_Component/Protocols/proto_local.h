@@ -1,25 +1,24 @@
 /**
- ******************************************************************************
+ ***************************************************************************************************
  *@file               :   proto_local.h
  *@brief              :   Local Modbus RTU framing and register callbacks.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
- ******************************************************************************
+ ***************************************************************************************************
  */
 
-/* define to prevent recursive inclusion ------------------------------------*/
+/* define to prevent recursive inclusion ---------------------------------------------------------*/
 #ifndef PROTO_LOCAL_H
 #define PROTO_LOCAL_H
 
-/* includes -----------------------------------------------------------------*/
+/* includes --------------------------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif // end of __cplusplus
-/* define -------------------------------------------------------------------*/
+/* define ----------------------------------------------------------------------------------------*/
 
 #define PROTO_LOCAL_ADDRESS (0x15U)
 #define PROTO_LOCAL_READ (0x03U)
@@ -30,11 +29,10 @@ extern "C"
     (PROTO_LOCAL_LAST_REGISTER - PROTO_LOCAL_FIRST_REGISTER + 1U)
 #define PROTO_LOCAL_MAX_REPLY (5U + 2U * PROTO_LOCAL_REGISTER_COUNT)
 
-/* typedef ------------------------------------------------------------------*/
+/* typedef ---------------------------------------------------------------------------------------*/
 
 /* Wire addresses of contiguous registers, not byte offsets. */
-typedef enum PROTO_LOCAL_REGISTER_T
-{
+typedef enum PROTO_LOCAL_REGISTER_T {
     PROTO_LOCAL_REG_INPUT_VOLTAGE = PROTO_LOCAL_FIRST_REGISTER,
     PROTO_LOCAL_REG_INPUT_CURRENT,
     PROTO_LOCAL_REG_BATTERY_VOLTAGE,
@@ -51,8 +49,7 @@ typedef enum PROTO_LOCAL_REGISTER_T
     PROTO_LOCAL_REG_PROTECTION_STATE,
 } proto_local_register_t;
 
-typedef enum PROTO_LOCAL_STATUS_T
-{
+typedef enum PROTO_LOCAL_STATUS_T {
     PROTO_LOCAL_OK               = 0U,
     PROTO_LOCAL_ILLEGAL_FUNCTION = 1U,
     PROTO_LOCAL_ILLEGAL_ADDRESS  = 2U,
@@ -65,17 +62,14 @@ typedef enum PROTO_LOCAL_STATUS_T
  * Signed register values use their 16-bit two's-complement encoding.
  * Write must validate permission/value and apply the change before OK.
  * NULL write callback rejects all writes with ILLEGAL_ADDRESS. */
-typedef struct
-{
-    proto_local_status_t (*pf_read_registers)(uint16_t  address,
-                                              uint16_t  count,
-                                              uint16_t *p_values);
+typedef struct {
+    proto_local_status_t (*pf_read_registers)(uint16_t address, uint16_t count, uint16_t *p_values);
     proto_local_status_t (*pf_write_register)(uint16_t address, uint16_t value);
 } proto_local_provider_t;
 
-/* variables ----------------------------------------------------------------*/
+/* variables -------------------------------------------------------------------------------------*/
 
-/* function  ----------------------------------------------------------------*/
+/* function  -------------------------------------------------------------------------------------*/
 /* CRC16/MODBUS: initial FFFF, reflected polynomial A001, no final XOR.
  * NULL returns 0; a non-NULL empty buffer returns FFFF. */
 uint16_t proto_local_crc16(const uint8_t *p_data, uint16_t length);
@@ -97,4 +91,4 @@ uint16_t proto_local_handle(const uint8_t                *p_request,
 #endif // end of __cplusplus
 
 #endif /* PROTO_LOCAL_H */
-/* end of file --------------------------------------------------------------*/
+/* end of file -----------------------------------------------------------------------------------*/

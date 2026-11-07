@@ -7,16 +7,16 @@ IndentWidth: 4
 TabWidth: 4
 UseTab: Never
 
-# Allman风格：{ 独占一行（函数、if、for、while 等）
-BreakBeforeBraces: Allman
+# 左大括号跟在语句后面，else 与前一个右大括号同行
+BreakBeforeBraces: Attach
 IndentExternBlock: NoIndent
 
 # 列宽限制
-ColumnLimit: 80
+ColumnLimit: 100
 
 
-# 括号前不加空格：if(x)  for(x)  while(x)
-SpaceBeforeParens: Never
+# 控制语句括号前加空格：if (x)  for (...)；函数调用不加
+SpaceBeforeParens: ControlStatements
 
 # 指针符号靠右（贴近变量名）：int *p
 PointerAlignment: Right

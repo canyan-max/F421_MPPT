@@ -1,30 +1,28 @@
 /**
- ******************************************************************************
+ ***************************************************************************************************
  *@file               :   bsp_measure.h
  *@brief              :   Convert one coherent raw ADC frame to board units.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
- ******************************************************************************
+ ***************************************************************************************************
  */
 
-/* define to prevent recursive inclusion ------------------------------------*/
+/* define to prevent recursive inclusion ---------------------------------------------------------*/
 #ifndef BSP_MEASURE_H
 #define BSP_MEASURE_H
-/* includes -----------------------------------------------------------------*/
+/* includes --------------------------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stddef.h>
 
 #include "plat_error.h"
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif // end of __cplusplus
-/* define -------------------------------------------------------------------*/
+/* define ----------------------------------------------------------------------------------------*/
 #define BSP_MEASURE_TEMPERATURE_INVALID (INT16_MIN)
-/* typedef ------------------------------------------------------------------*/
+/* typedef ---------------------------------------------------------------------------------------*/
 /* Board scan indices, not physical ADC channel numbers. */
-typedef enum BSP_MEASURE_SAMPLE_INDEX_T
-{
+typedef enum BSP_MEASURE_SAMPLE_INDEX_T {
     BSP_MEASURE_OUT_CUR = 0U,
     BSP_MEASURE_IN_CUR,
     BSP_MEASURE_BAT_VOL,
@@ -34,8 +32,7 @@ typedef enum BSP_MEASURE_SAMPLE_INDEX_T
     BSP_MEASURE_CHANNEL_COUNT,
 } bsp_measure_sample_index_t;
 
-typedef struct BSP_MEASURE_VALUE_T
-{
+typedef struct BSP_MEASURE_VALUE_T {
     /* Filtered voltages used by startup, CV control and protection. */
     uint32_t input_voltage_mv;
     uint32_t battery_voltage_mv;
@@ -49,20 +46,17 @@ typedef struct BSP_MEASURE_VALUE_T
     /* 0.1 degrees Celsius; INVALID means conversion unavailable. */
     int16_t temperature_deci_c;
 } bsp_measure_value_t;
-typedef enum BSP_MEASURE_ERROR_T
-{
+typedef enum BSP_MEASURE_ERROR_T {
     BSP_MEASURE_ERROR_NONE = 0U,
     BSP_MEASURE_ERROR_INIT,
     BSP_MEASURE_ERROR_DMA,
     BSP_MEASURE_ERROR_CONVERT,
     BSP_MEASURE_ERROR_FILTER,
 } bsp_measure_error_t;
-typedef void (*bsp_measure_data_callback_t)(const bsp_measure_value_t *p_value,
-                                            uint32_t sequence);
-typedef void (*bsp_measure_error_callback_t)(bsp_measure_error_t error,
-                                             platform_err_t      status);
-/* variables ----------------------------------------------------------------*/
-/* function  ----------------------------------------------------------------*/
+typedef void (*bsp_measure_data_callback_t)(const bsp_measure_value_t *p_value, uint32_t sequence);
+typedef void (*bsp_measure_error_callback_t)(bsp_measure_error_t error, platform_err_t status);
+/* variables -------------------------------------------------------------------------------------*/
+/* function  -------------------------------------------------------------------------------------*/
 /* Main context only. NULL unregisters the corresponding callback.
  * Callbacks execute synchronously inside process(), never inside DMA ISR.
  * p_value is valid only during the callback; copy to retain it.
@@ -85,4 +79,4 @@ void bsp_measure_process(void);
 }
 #endif // end of __cplusplus
 #endif /* BSP_MEASURE_H */
-/* end of file --------------------------------------------------------------*/
+/* end of file -----------------------------------------------------------------------------------*/

@@ -1,42 +1,40 @@
 /**
- ******************************************************************************
+ ***************************************************************************************************
  *@file               :   bsp_power_path.h
  *@brief              :   Provide board charge and discharge switching
  * interfaces.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
- ******************************************************************************
+ ***************************************************************************************************
  */
 
-/* define to prevent recursive inclusion ------------------------------------*/
+/* define to prevent recursive inclusion ---------------------------------------------------------*/
 #ifndef BSP_POWER_PATH_H
 #define BSP_POWER_PATH_H
 
-/* includes -----------------------------------------------------------------*/
+/* includes --------------------------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stddef.h>
 #include "plat_error.h"
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif // end of __cplusplus
-/* define -------------------------------------------------------------------*/
+/* define ----------------------------------------------------------------------------------------*/
 /* Nonzero encoding only, not a charging or reverse-current safety threshold.
  * Service must validate the live voltage-ratio boundary before start/set. */
 #define BSP_POWER_PATH_CHARGE_DUTY_MIN_PERMILLE (1U)
 #define BSP_POWER_PATH_CHARGE_DUTY_MAX_PERMILLE (950U)
 
-/* typedef ------------------------------------------------------------------*/
-typedef struct BSP_DISCHARGE_SHORT_STATE_T
-{
+/* typedef ---------------------------------------------------------------------------------------*/
+typedef struct BSP_DISCHARGE_SHORT_STATE_T {
     uint32_t generation;
     uint8_t  latched;
 } bsp_discharge_short_state_t;
 
-/* variables ----------------------------------------------------------------*/
+/* variables -------------------------------------------------------------------------------------*/
 
-/* function  ----------------------------------------------------------------*/
+/* function  -------------------------------------------------------------------------------------*/
 /* Main context, after GPIO/TMR1 initialization. Charge duty outside the
  * published min/max range is rejected. The caller owns startup timing,
  * soft start and current regulation.
@@ -64,4 +62,4 @@ platform_err_t bsp_power_path_discharge_set(uint8_t enabled);
 #endif // end of __cplusplus
 
 #endif /* BSP_POWER_PATH_H */
-/* end of file --------------------------------------------------------------*/
+/* end of file -----------------------------------------------------------------------------------*/

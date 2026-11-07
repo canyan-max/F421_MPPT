@@ -10,7 +10,7 @@ description: 按用户的 Keil C/H 模板新建自研 C 源文件和头文件，
 - [头文件模板](assets/File.h.template)
 
 ## 模板规则
-- 保留文件头的 `@file`、`@brief`、`@version`、`@note` 排列、分隔线及分区顺序；缩进使用 4 个空格，不插入 tab。
+- 保留文件头的 `@file`、`@brief`、`@version`、`@note` 排列、分隔线及分区顺序；文件头星号分隔线和分区横线均为 100 列，包含注释符及前导空格；缩进使用 4 个空格，不插入 tab。
 - `{{FILE_NAME}}` 替换为带扩展名的实际文件名；`{{FILE_STEM}}` 为不含扩展名的文件名。例如 `plat_adc.c` 包含 `"plat_adc.h"`，禁止生成 `.c.h`。
 - `{{BRIEF}}` 写实际职责，不保留通用占位描述，不把业务或算法文件误称为 HAL。
 - `{{HEADER_GUARD}}` 使用实际文件名转大写、非字母数字替换为下划线，必要时加模块前缀避免冲突；若结果以数字或保留标识符形式开头，补安全的模块前缀，不生成双下划线或下划线加大写开头的保护宏。例：`plat_adc.h` -> `PLAT_ADC_H`。生成完整 `#ifndef / #define / #endif`。
@@ -23,7 +23,7 @@ description: 按用户的 Keil C/H 模板新建自研 C 源文件和头文件，
 
 - 保护宏的 `#define` 行仅保留宏名，不追加 `/*end of 文件名*/` 等文件结束注释；文件结束注释只放在文件末尾。
 
-- `@brief` 需要换行时，续行保留注释星号，并将正文对齐到上一行说明文字的起始列，不紧贴星号；仍遵循 80 列目标。格式化时保留这一文件头布局，必要时仅格式化文件头以后的代码范围。
+- `@brief` 需要换行时，续行保留注释星号，并将正文对齐到上一行说明文字的起始列，不紧贴星号；仍遵循 100 列目标。格式化时保留这一文件头布局，必要时仅格式化文件头以后的代码范围。
 
 - 分区标题统一小写，包括 includes、private functions、exported functions 及 define to prevent recursive inclusion；保留分隔线和分区顺序。
 - include 行不生成解释头文件名称的模板注释，例如 stdint lib header file、stddef lib header file。

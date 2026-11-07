@@ -1,30 +1,28 @@
 /**
- ******************************************************************************
+ ***************************************************************************************************
  *@file               :   plat_adc.h
  *@brief              :   Provide raw ADC scan data and DMA event interfaces.
  *@version            :   V1.0
  *@note               :   1 tab == 4 spaces!
- ******************************************************************************
+ ***************************************************************************************************
  */
 
-/* define to prevent recursive inclusion ------------------------------------*/
+/* define to prevent recursive inclusion ---------------------------------------------------------*/
 #ifndef PLAT_ADC_H
 #define PLAT_ADC_H
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif // end of __cplusplus
-/* includes -----------------------------------------------------------------*/
+/* includes --------------------------------------------------------------------------------------*/
 #include <stdint.h>
 #include <stddef.h>
 #include "plat_error.h"
 #include "plat_resource.h"
-/* define -------------------------------------------------------------------*/
+/* define ----------------------------------------------------------------------------------------*/
 
-/* typedef ------------------------------------------------------------------*/
-typedef enum PLAT_ADC_EVENT_T
-{
+/* typedef ---------------------------------------------------------------------------------------*/
+typedef enum PLAT_ADC_EVENT_T {
     PLAT_ADC_EVENT_HALF = 0U,
     PLAT_ADC_EVENT_FULL,
     PLAT_ADC_EVENT_ERROR,
@@ -35,16 +33,16 @@ typedef enum PLAT_ADC_EVENT_T
  * Each completed half contains one configured ADC scan and is valid until
  * DMA returns to it. Do not defer a pointer without deadline/overrun
  * handling. Both flags pending discard this batch and report overrun;
- *
+ ***************************************************************************************************
  * acquisition continues. A transfer error stops DMA. */
 typedef void (*plat_adc_callback_t)(plat_adc_id_t            id,
                                     plat_adc_event_t         event,
                                     const volatile uint16_t *p_samples,
                                     uint16_t                 count);
 
-/* variables ----------------------------------------------------------------*/
+/* variables -------------------------------------------------------------------------------------*/
 
-/* function  ----------------------------------------------------------------*/
+/* function  -------------------------------------------------------------------------------------*/
 /* Main context only; never call start/stop from callbacks or other ISRs.
  * Startup only: ADC calibrated, DMA initialized, TMR trigger stopped and no
  * conversion in progress. Buffer halfword aligned; length must equal twice
@@ -68,5 +66,4 @@ void plat_adc_memory_barrier(void);
 #endif // end of __cplusplus
 
 #endif /* PLAT_ADC_H */
-/* end of file --------------------------------------------------------------*/
-
+/* end of file -----------------------------------------------------------------------------------*/

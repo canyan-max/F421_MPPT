@@ -36,8 +36,8 @@ project/ 保留初始化、启动、中断入口及装配；参考目录 voice_c
 - 保持模板文件头、分区和 4 空格缩进，按实际文件名和职责替换占位符；头文件生成完整保护宏。
 - 不为套模板重排现有文件，不改厂商、第三方或生成代码格式；模板资源不加入 MDK。
 ## 自研 C/H 代码格式
-- 编写或修改自研 C/H 时使用 `.agents/skills/c-code-style/SKILL.md`，以根目录 `.clang-format` 为格式来源，重点遵循 80 列及 if 语句格式。
+- 编写或修改自研 C/H 时使用 `.agents/skills/c-code-style/SKILL.md`，以该技能目录中的 `.clang-format` 为格式来源，重点遵循 100 列及 if 语句格式。
 - 仅格式化当前任务涉及的范围，不批量重排无关文件。
-- 根目录提供 `clang-format.exe`；修改自研 C/H 后，使用 PowerShell 7 调用
-  `.agents/scripts/format-c-code.ps1`，并显式传入本次修改的文件。脚本仅接受
-  自研代码目录中的 C/H 文件，不使用目录、通配符或全工程批量格式化。
+- 技能目录提供 `clang-format.exe`；修改自研 C/H 后，使用 PowerShell 7 调用
+  `.agents/skills/c-code-style/scripts/format-c-code.ps1`，显式传入本次修改的
+  自研 C/H 文件。调用前核对文件归属，不使用目录、通配符或全工程批量格式化。

@@ -6,6 +6,8 @@
 
 # 可执行文件与脚本（按你的要求忽略）
 *.exe
+# 随代码规范技能迁移的格式化工具
+!/.agents/skills/c-code-style/clang-format.exe
 *.bat
 
 # 编译中间文件（目标文件、依赖、调试符号等）
